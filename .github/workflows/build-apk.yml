@@ -37,4 +37,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fog-of-war-apk
-          path: android/app/build/outputs/apk/debug/app-debug.ap
+          path: android/app/build/outputs/apk/**/*.apk
