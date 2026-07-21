@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Fog of War</string>
+    <string name="title_activity_main">Fog of War</string>
+    <string name="package_name">com.example.fogofwar</string>
+    <string name="custom_url_scheme">com.example.fogofwar</string>
+</resources>

@@ -1,0 +1,23 @@
+{
+  "name": "fog-of-war-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@capacitor-community/background-geolocation": "^1.2.26",
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "h3-js": "^4.1.0",
+    "leaflet": "^1.9.4",
+    "localforage": "^1.10.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}

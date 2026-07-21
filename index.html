@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Fog of War Map</title>
+  <link rel="stylesheet" href="node_modules/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+
+  <!-- Map Container -->
+  <div id="map"></div>
+
+  <!-- Fog Canvas Overlay -->
+  <canvas id="fogCanvas"></canvas>
+
+  <!-- Floating Stats Panel -->
+  <div class="stats-card">
+    <div class="stat-item">
+      <span class="stat-value" id="unlockedCount">0</span>
+      <span class="stat-label">Hexes Unlocked</span>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-item">
+      <span class="stat-value" id="speedDisplay">0 km/h</span>
+      <span class="stat-label">Current Speed</span>
+    </div>
+  </div>
+
+  <!-- Control Buttons -->
+  <div class="controls">
+    <button id="btnCenter" class="btn" title="Center Map">🎯</button>
+    <button id="btnToggleTracking" class="btn btn-active" title="Toggle GPS">📡</button>
+    <button id="btnClear" class="btn btn-danger" title="Clear Progress">🗑️</button>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
