@@ -21,7 +21,7 @@ export class FogEngine {
     this.ctx.clearRect(0, 0, width, height);
 
     // 2. Semi-transparent dark fog (0.65 opacity)
-    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
+    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
     this.ctx.fillRect(0, 0, width, height);
 
     // 3. Set blend mode to erase fog

@@ -13,10 +13,11 @@ body, html {
   color: #ffffff;
 }
 
-#map {
-  width: 100%;
+#map, .map-container {
+  width: 100vw;
   height: 100vh;
-  z-index: 1;
+  margin: 0;
+  padding: 0;
 }
 
 #fogCanvas {
