@@ -4,16 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>Fog of War Map</title>
-  <link rel="stylesheet" href="node_modules/leaflet/dist/leaflet.css" />
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <!-- Custom App CSS -->
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
 
-  <!-- Map Container -->
-  <div id="map"></div>
-
-  <!-- Fog Canvas Overlay -->
-  <canvas id="fogCanvas"></canvas>
+  <!-- Map & Fog Container -->
+  <div id="map-container"> 
+    <div id="map"></div>
+    <canvas id="fog-canvas"></canvas>
+  </div>
 
   <!-- Floating Stats Panel -->
   <div class="stats-card">

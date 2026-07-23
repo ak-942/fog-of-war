@@ -20,14 +20,14 @@ body, html {
   padding: 0;
 }
 
-#fogCanvas {
+#fog-canvas {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
+  width: 100vw;
   height: 100vh;
-  z-index: 400; /* Placed directly above Leaflet tiles, below controls */
-  pointer-events: none; /* Allows user to interact with map below */
+  z-index: 400; /* Leaflet tiles sit at z-index ~200, so 400 puts fog on top */
+  pointer-events: none; /* VERY IMPORTANT: lets you still drag and zoom the map through the fog */
 }
 
 /* Floating Stats Card */
@@ -112,4 +112,30 @@ body, html {
 
 .btn-danger {
   border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* Container positioning */
+#map-container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Force map to take up full screen */
+#map {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* Position fog canvas directly on top of map tiles */
+#fog-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 400;          /* Higher than Leaflet tiles (~200) */
+  pointer-events: none;  /* Allows touch/drag/zoom actions to pass through to the map */
 }
