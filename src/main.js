@@ -6,45 +6,102 @@ import { FogEngine } from './fogEngine.js';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
-// --- 1. Map & Fog Engine Setup ---
-// Initialize map (starts centered at a default location)
-const map = L.map('map').setView([22.7196, 75.8577], 15);
+// --- Configuration Constants ---
+// Resolution 10 = ~130m across (Resolution 11 = ~50m across)
+const H3_RESOLUTION = 12; 
+const STORAGE_KEY = 'fog_unlocked_cells';
 
-// Add OpenStreetMap tile layer
+// --- LocalStorage Persistence Helpers ---
+function loadSavedHexes() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? new Set(JSON.parse(saved)) : new Set();
+  } catch (e) {
+    console.error('Failed to load saved fog data:', e);
+    return new Set();
+  }
+}
+
+function saveHexes(hexSet) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(hexSet)));
+  } catch (e) {
+    console.error('Failed to save fog data:', e);
+  }
+}
+
+// --- 1. Map & Fog Engine Setup ---
+const map = L.map('map').setView([22.7196, 75.8577], 16);
+
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap'
 }).addTo(map);
 
-// Canvas overlay initialization
 const canvas = document.getElementById('fog-canvas');
 const fogEngine = new FogEngine(canvas, map);
 
 // App State
-let unlockedCells = new Set(); // Using a Set to avoid duplicate hexes
+let unlockedCells = loadSavedHexes(); // Loaded from disk on launch
 let userMarker = null;
 let initialCenterDone = false;
 let isTrackingActive = true;
 
-// Initial fog render (covers entire map)
+// Track last position for custom speed calculation fallback
+let lastPosition = null;
+
+// Initial UI & Fog Render from stored memory
+updateUIStats(0);
 fogEngine.render(Array.from(unlockedCells));
 
-// Re-render fog smoothly on pan/zoom
 map.on('move', () => {
   fogEngine.render(Array.from(unlockedCells));
 });
 
+// --- Distance Calculation (Haversine Formula in meters) ---
+function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // Earth radius in meters
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // --- 2. Location Update Handler ---
 function onLocationUpdate(position) {
-  const { latitude, longitude, speed } = position.coords;
+  const { latitude, longitude } = position.coords;
+  const now = position.timestamp || Date.now();
 
-  // A. Center map on user for the first fix
+  // Calculate speed fallback if native speed is null/zero
+  let currentSpeedMetersPerSec = position.coords.speed;
+
+  if (lastPosition && (currentSpeedMetersPerSec === null || currentSpeedMetersPerSec === undefined || currentSpeedMetersPerSec === 0)) {
+    const timeElapsedSec = (now - lastPosition.timestamp) / 1000;
+    if (timeElapsedSec > 0.5) {
+      const distanceMeters = calculateDistanceMeters(
+        lastPosition.latitude,
+        lastPosition.longitude,
+        latitude,
+        longitude
+      );
+      currentSpeedMetersPerSec = distanceMeters / timeElapsedSec;
+    }
+  }
+
+  // Save current position as last position
+  lastPosition = { latitude, longitude, timestamp: now };
+
+  // Center map on user for initial fix
   if (!initialCenterDone) {
     map.setView([latitude, longitude], 16);
     initialCenterDone = true;
   }
 
-  // B. Update or create user location marker
+  // Update or create location marker
   if (!userMarker) {
     userMarker = L.circleMarker([latitude, longitude], {
       radius: 8,
@@ -58,18 +115,18 @@ function onLocationUpdate(position) {
     userMarker.setLatLng([latitude, longitude]);
   }
 
-  // C. Unlock H3 Cell at current GPS location (Resolution 9 = ~100m hex)
-  const currentCell = latLngToCell(latitude, longitude, 9);
+  // Unlock smaller H3 Cell (Resolution 10)
+  const currentCell = latLngToCell(latitude, longitude, H3_RESOLUTION);
   if (!unlockedCells.has(currentCell)) {
     unlockedCells.add(currentCell);
-    updateUIStats(speed);
+    saveHexes(unlockedCells); // Save immediately to disk
   }
 
-  // D. Redraw Fog Overlay
+  updateUIStats(currentSpeedMetersPerSec);
   fogEngine.render(Array.from(unlockedCells));
 }
 
-// Update DOM elements from index.html
+// Update DOM elements
 function updateUIStats(speedMetersPerSec) {
   const countDisplay = document.getElementById('unlockedCount');
   const speedDisplay = document.getElementById('speedDisplay');
@@ -79,27 +136,21 @@ function updateUIStats(speedMetersPerSec) {
   }
 
   if (speedDisplay) {
-    // Convert m/s to km/h
-    const kmh = speedMetersPerSec ? Math.round(speedMetersPerSec * 3.6) : 0;
+    const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
     speedDisplay.textContent = `${kmh} km/h`;
   }
 }
 
-// --- 3. Request Location & Start Tracking ---
+// --- 3. Request Location & GPS Watchers ---
 async function startGPS() {
-  // Web Browser Geolocation Standard Prompt
   if ('geolocation' in navigator) {
     navigator.geolocation.getCurrentPosition(
       (pos) => onLocationUpdate(pos),
-      (err) => {
-        console.warn('Initial web location prompt denied or failed:', err);
-        alert('Please allow location access in your browser settings to reveal the map fog!');
-      },
+      (err) => console.warn('Web initial location prompt warning:', err),
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }
 
-  // Mobile App Native Background Tracker
   try {
     await BackgroundGeolocation.addWatcher(
       {
@@ -107,30 +158,23 @@ async function startGPS() {
         backgroundTitle: "Fog of War Active",
         requestPermissions: true,
         stale: false,
-        distanceFilter: 5 // Trigger updates every 5 meters moved
+        distanceFilter: 3
       },
       (location, error) => {
-        if (error) {
-          if (error.code === "NOT_AUTHORIZED") {
-            alert("Please set Location permission to 'Allow All The Time' in settings.");
-          }
-          return;
-        }
-
+        if (error) return;
         if (location && isTrackingActive) {
           onLocationUpdate({
             coords: {
               latitude: location.latitude,
               longitude: location.longitude,
               speed: location.speed
-            }
+            },
+            timestamp: location.time || Date.now()
           });
         }
       }
     );
   } catch (err) {
-    console.warn("Native Background Plugin not available, using web fallback:", err);
-    // Web Watcher Fallback
     navigator.geolocation.watchPosition(
       (pos) => {
         if (isTrackingActive) onLocationUpdate(pos);
@@ -141,7 +185,7 @@ async function startGPS() {
   }
 }
 
-// --- 4. Button Controls Setup ---
+// --- 4. Controls ---
 document.getElementById('btnCenter')?.addEventListener('click', () => {
   if (userMarker) {
     map.setView(userMarker.getLatLng(), 16);
@@ -156,10 +200,10 @@ document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
 document.getElementById('btnClear')?.addEventListener('click', () => {
   if (confirm('Are you sure you want to clear your unlocked fog progress?')) {
     unlockedCells.clear();
+    localStorage.removeItem(STORAGE_KEY);
     updateUIStats(0);
     fogEngine.render([]);
   }
 });
 
-// Immediately initiate location request on app launch
 startGPS();
