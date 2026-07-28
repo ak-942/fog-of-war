@@ -7,12 +7,11 @@ import { FogEngine } from './fogengine.js';
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
 // --- Configuration Constants ---
-// Resolution 11 (~50m hexes). Change to 12 for finer ~20m granularity.
 const H3_RESOLUTION = 11; 
 const STORAGE_KEY = 'fog_unlocked_cells';
-const MAX_IMPORT_HEXES = 200000; // Cap set to 200,000 hexes (~10,000 km of roads)
+const MAX_IMPORT_HEXES = 200000;
 
-// --- LocalStorage Persistence Helpers ---
+// --- LocalStorage Helpers ---
 function loadSavedHexes() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -31,7 +30,7 @@ function saveHexes(hexSet) {
   }
 }
 
-// --- 1. Map & Fog Engine Setup ---
+// --- Map & Fog Engine Setup ---
 const map = L.map('map').setView([22.7196, 75.8577], 16);
 
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -49,7 +48,7 @@ let initialCenterDone = false;
 let isTrackingActive = true;
 let lastPosition = null;
 
-// Initial UI & Fog Render from stored memory
+// Initial Render
 updateUIStats(0);
 fogEngine.render(Array.from(unlockedCells));
 
@@ -57,7 +56,7 @@ map.on('move', () => {
   fogEngine.render(Array.from(unlockedCells));
 });
 
-// --- Distance Calculation (Haversine Formula in meters) ---
+// --- Distance Calculation (Haversine Formula) ---
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -70,12 +69,11 @@ function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// --- 2. Location Update Handler ---
+// --- Location Update Handler ---
 function onLocationUpdate(position) {
   const { latitude, longitude } = position.coords;
   const now = position.timestamp || Date.now();
 
-  // Speed calculation fallback
   let currentSpeedMetersPerSec = position.coords.speed;
 
   if (lastPosition && (currentSpeedMetersPerSec === null || currentSpeedMetersPerSec === undefined || currentSpeedMetersPerSec === 0)) {
@@ -111,7 +109,6 @@ function onLocationUpdate(position) {
     userMarker.setLatLng([latitude, longitude]);
   }
 
-  // Unlock current H3 Cell
   const currentCell = latLngToCell(latitude, longitude, H3_RESOLUTION);
   if (!unlockedCells.has(currentCell)) {
     unlockedCells.add(currentCell);
@@ -122,27 +119,23 @@ function onLocationUpdate(position) {
   fogEngine.render(Array.from(unlockedCells));
 }
 
-// Update DOM elements
 function updateUIStats(speedMetersPerSec) {
   const countDisplay = document.getElementById('unlockedCount');
   const speedDisplay = document.getElementById('speedDisplay');
 
-  if (countDisplay) {
-    countDisplay.textContent = unlockedCells.size;
-  }
-
+  if (countDisplay) countDisplay.textContent = unlockedCells.size;
   if (speedDisplay) {
     const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
     speedDisplay.textContent = `${kmh} km/h`;
   }
 }
 
-// --- 3. Request Location & GPS Watchers ---
+// --- GPS Watcher ---
 async function startGPS() {
   if ('geolocation' in navigator) {
     navigator.geolocation.getCurrentPosition(
       (pos) => onLocationUpdate(pos),
-      (err) => console.warn('Web initial location prompt warning:', err),
+      (err) => console.warn('Web initial location warning:', err),
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }
@@ -181,11 +174,32 @@ async function startGPS() {
   }
 }
 
-// --- 4. Controls ---
+// --- Sidebar Menu Logic ---
+const btnMenu = document.getElementById('btnMenu');
+const btnCloseSidebar = document.getElementById('btnCloseSidebar');
+const sidebar = document.getElementById('sidebar');
+const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+function openSidebar() {
+  sidebar?.classList.add('open');
+  sidebarOverlay?.classList.add('active');
+}
+
+function closeSidebar() {
+  sidebar?.classList.remove('open');
+  sidebarOverlay?.classList.remove('active');
+}
+
+btnMenu?.addEventListener('click', openSidebar);
+btnCloseSidebar?.addEventListener('click', closeSidebar);
+sidebarOverlay?.addEventListener('click', closeSidebar);
+
+// --- Controls ---
 document.getElementById('btnCenter')?.addEventListener('click', () => {
   if (userMarker) {
     map.setView(userMarker.getLatLng(), 16);
   }
+  closeSidebar();
 });
 
 document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
@@ -195,8 +209,9 @@ document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
   btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 });
 
-// --- 5. Export & Import Feature ---
+// --- Export & Import ---
 document.getElementById('btnExport')?.addEventListener('click', () => {
+  closeSidebar();
   if (unlockedCells.size === 0) {
     alert('No unlocked areas to export yet!');
     return;
@@ -224,6 +239,7 @@ document.getElementById('btnExport')?.addEventListener('click', () => {
 const fileInput = document.getElementById('fileInput');
 
 document.getElementById('btnImport')?.addEventListener('click', () => {
+  closeSidebar();
   fileInput?.click();
 });
 
@@ -241,34 +257,28 @@ fileInput?.addEventListener('change', (e) => {
         throw new Error('File is empty or unreadable.');
       }
 
-      // Strip UTF-8 Byte Order Mark (BOM) if present
       if (rawText.charCodeAt(0) === 0xFEFF) {
         rawText = rawText.slice(1);
       }
       rawText = rawText.trim();
 
-      // Step 1: Safe JSON Parse
       const parsed = JSON.parse(rawText);
 
-      // Step 2: Signature Validation
       if (!parsed || parsed.app !== 'fog-of-war' || !Array.isArray(parsed.hexes)) {
         alert('Invalid or incompatible Fog of War backup file.');
         return;
       }
 
-      // Step 3: Non-empty Check
       if (parsed.hexes.length === 0) {
         alert('The backup file contains no hex data.');
         return;
       }
 
-      // Step 4: Max Count Check
       if (parsed.hexes.length > MAX_IMPORT_HEXES) {
         alert(`File contains too many hexes (${parsed.hexes.length}). Maximum allowed is ${MAX_IMPORT_HEXES}.`);
         return;
       }
 
-      // Step 5: Sanitize & Validate H3 Strings
       const validHexes = [];
       for (let item of parsed.hexes) {
         if (typeof item === 'string') {
@@ -284,7 +294,6 @@ fileInput?.addEventListener('change', (e) => {
         return;
       }
 
-      // Step 6: Load into App & Re-render
       unlockedCells = new Set(validHexes);
       saveHexes(unlockedCells);
       updateUIStats(0);
@@ -295,7 +304,6 @@ fileInput?.addEventListener('change', (e) => {
       console.error('Import failure:', err);
       alert('Failed to import file. Please ensure it is a valid JSON backup file.');
     } finally {
-      // Reset input so re-selecting the same file works again
       e.target.value = '';
     }
   };
