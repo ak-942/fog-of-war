@@ -1,7 +1,7 @@
 import { registerPlugin } from '@capacitor/core';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { latLngToCell, isValidCell } from 'h3-js';
+import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
 import { FogEngine } from './fogengine.js';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
@@ -10,6 +10,12 @@ const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 const H3_RESOLUTION = 11; 
 const STORAGE_KEY = 'fog_unlocked_cells';
 const MAX_IMPORT_HEXES = 200000;
+
+// Safety Guardrail Thresholds
+const MAX_ACCURACY_METERS = 35;      // Reject GPS fixes with accuracy worse than 35m
+const MIN_JITTER_DISTANCE_M = 3;     // Ignore micro-movements under 3 meters (fixes desk jitter)
+const MAX_CHAIN_DISTANCE_M = 300;    // Max jump distance allowed for hex chaining (prevents shortcut lines)
+const MAX_GRID_STEPS = 40;           // Max H3 hex steps allowed for path computation (prevents lag)
 
 // --- LocalStorage Helpers ---
 function loadSavedHexes() {
@@ -47,6 +53,8 @@ let userMarker = null;
 let initialCenterDone = false;
 let isTrackingActive = true;
 let lastPosition = null;
+let lastValidCell = null;
+let speedHistory = []; // Buffer for rolling speed average
 
 // Initial Render
 updateUIStats(0);
@@ -69,27 +77,76 @@ function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+// --- Auto-Hole Filling (Fills Trapped "Donut" Hexes) ---
+function fillTrappedHoles(newlyUnlocked, unlockedSet) {
+  let queue = Array.from(newlyUnlocked);
+
+  while (queue.length > 0) {
+    const nextQueue = [];
+    for (const cell of queue) {
+      // Get 1-ring surrounding neighbors
+      const kRing = gridDisk(cell, 1);
+      for (const neighbor of kRing) {
+        if (!unlockedSet.has(neighbor)) {
+          // Check neighbor's surrounding 6 cells
+          const neighborRing = gridDisk(neighbor, 1).filter(c => c !== neighbor);
+          let unlockedCount = 0;
+          for (const n of neighborRing) {
+            if (unlockedSet.has(n)) unlockedCount++;
+          }
+          // If 5 or 6 surrounding neighbors are unlocked, auto-clear the center hole
+          if (unlockedCount >= 5) {
+            unlockedSet.add(neighbor);
+            nextQueue.push(neighbor);
+          }
+        }
+      }
+    }
+    queue = nextQueue;
+  }
+}
+
 // --- Location Update Handler ---
 function onLocationUpdate(position) {
-  const { latitude, longitude } = position.coords;
+  const { latitude, longitude, accuracy, speed } = position.coords;
   const now = position.timestamp || Date.now();
 
-  let currentSpeedMetersPerSec = position.coords.speed;
+  // Guardrail 1: Accuracy Filter
+  if (accuracy && accuracy > MAX_ACCURACY_METERS) {
+    console.warn(`GPS fix rejected: accuracy (${Math.round(accuracy)}m) exceeds ${MAX_ACCURACY_METERS}m limit.`);
+    return;
+  }
 
-  if (lastPosition && (currentSpeedMetersPerSec === null || currentSpeedMetersPerSec === undefined || currentSpeedMetersPerSec === 0)) {
+  let distanceMoved = 0;
+  let rawSpeedMetersPerSec = 0;
+
+  if (lastPosition) {
     const timeElapsedSec = (now - lastPosition.timestamp) / 1000;
-    if (timeElapsedSec > 0.5) {
-      const distanceMeters = calculateDistanceMeters(
-        lastPosition.latitude,
-        lastPosition.longitude,
-        latitude,
-        longitude
-      );
-      currentSpeedMetersPerSec = distanceMeters / timeElapsedSec;
+    distanceMoved = calculateDistanceMeters(
+      lastPosition.latitude,
+      lastPosition.longitude,
+      latitude,
+      longitude
+    );
+
+    // Filter Micro-Jitter (ignore movements < 3m)
+    if (distanceMoved < MIN_JITTER_DISTANCE_M) {
+      rawSpeedMetersPerSec = 0;
+    } else if (timeElapsedSec > 0.5) {
+      rawSpeedMetersPerSec = distanceMoved / timeElapsedSec;
+    } else {
+      rawSpeedMetersPerSec = speed || 0;
     }
+  } else if (speed !== null && speed !== undefined) {
+    rawSpeedMetersPerSec = speed;
   }
 
   lastPosition = { latitude, longitude, timestamp: now };
+
+  // Speed Smoothing: Rolling 3-Sample Average
+  speedHistory.push(rawSpeedMetersPerSec);
+  if (speedHistory.length > 3) speedHistory.shift();
+  const smoothedSpeed = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
 
   if (!initialCenterDone) {
     map.setView([latitude, longitude], 16);
@@ -109,13 +166,56 @@ function onLocationUpdate(position) {
     userMarker.setLatLng([latitude, longitude]);
   }
 
+  // --- Hex Unlocking & Chaining ---
   const currentCell = latLngToCell(latitude, longitude, H3_RESOLUTION);
-  if (!unlockedCells.has(currentCell)) {
-    unlockedCells.add(currentCell);
+  const newlyUnlocked = new Set();
+
+  if (lastValidCell && lastValidCell !== currentCell) {
+    // Check Chaining Guardrails
+    const canChain = 
+      distanceMoved <= MAX_CHAIN_DISTANCE_M && 
+      gridDistance(lastValidCell, currentCell) <= MAX_GRID_STEPS;
+
+    if (canChain) {
+      try {
+        // Calculate intermediate hexes between previous location and current
+        const chainedHexes = gridPathCells(lastValidCell, currentCell);
+        for (const hex of chainedHexes) {
+          if (!unlockedCells.has(hex)) {
+            unlockedCells.add(hex);
+            newlyUnlocked.add(hex);
+          }
+        }
+      } catch (err) {
+        console.warn('Grid path calculation failed, unlocking current cell only:', err);
+        if (!unlockedCells.has(currentCell)) {
+          unlockedCells.add(currentCell);
+          newlyUnlocked.add(currentCell);
+        }
+      }
+    } else {
+      // Big gap or teleportation detected: unlock current cell only without chaining
+      if (!unlockedCells.has(currentCell)) {
+        unlockedCells.add(currentCell);
+        newlyUnlocked.add(currentCell);
+      }
+    }
+  } else {
+    if (!unlockedCells.has(currentCell)) {
+      unlockedCells.add(currentCell);
+      newlyUnlocked.add(currentCell);
+    }
+  }
+
+  lastValidCell = currentCell;
+
+  // Auto-Fill Trapped Holes if any new hexes were unlocked
+  if (newlyUnlocked.size > 0) {
+    fillTrappedHoles(newlyUnlocked, unlockedCells);
     saveHexes(unlockedCells);
   }
 
-  updateUIStats(currentSpeedMetersPerSec);
+  updateUIStats(smoothedSpeed);
   fogEngine.render(Array.from(unlockedCells));
 }
 
@@ -156,6 +256,7 @@ async function startGPS() {
             coords: {
               latitude: location.latitude,
               longitude: location.longitude,
+              accuracy: location.accuracy,
               speed: location.speed
             },
             timestamp: location.time || Date.now()
