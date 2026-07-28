@@ -2,42 +2,49 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>Fog of War Map</title>
-  
-  <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  
-  <!-- Custom App CSS -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Fog of War</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <div id="map"></div>
+  <canvas id="fog-canvas"></canvas>
 
-  <!-- Map & Fog Container -->
-  <div id="map-container"> 
-    <div id="map"></div>
-    <canvas id="fog-canvas"></canvas>
-  </div>
+  <!-- Hamburger Menu Icon -->
+  <button id="btnMenu" class="hamburger-btn" aria-label="Open Menu">☰</button>
 
-  <!-- Floating Stats Panel -->
-  <div class="stats-card">
-    <div class="stat-item">
-      <span class="stat-value" id="unlockedCount">0</span>
-      <span class="stat-label">Hexes Unlocked</span>
+  <!-- Top Stats Bar -->
+  <div class="top-stats-bar">
+    <div class="stat-box">
+      <span class="stat-label">Unlocked</span>
+      <span id="unlockedCount" class="stat-value">0</span>
     </div>
     <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-value" id="speedDisplay">0 km/h</span>
-      <span class="stat-label">Current Speed</span>
+    <div class="stat-box">
+      <span class="stat-label">Speed</span>
+      <span id="speedDisplay" class="stat-value">0 km/h</span>
     </div>
   </div>
 
-  <!-- Control Buttons -->
-  <div class="controls">
-    <button id="btnCenter" class="btn" title="Center Map">🎯</button>
-    <button id="btnToggleTracking" class="btn btn-active" title="Toggle GPS">📡</button>
-    <button id="btnClear" class="btn btn-danger" title="Clear Progress">🗑️</button>
+  <!-- Sidebar Dark Overlay -->
+  <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+  <!-- Slide-Out Sidebar Drawer -->
+  <div id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <h2>Menu</h2>
+      <button id="btnCloseSidebar" class="close-btn">&times;</button>
+    </div>
+    <div class="controls-vertical">
+      <button id="btnCenter" class="btn" title="Center Map">🎯 Center Map</button>
+      <button id="btnToggleTracking" class="btn btn-active" title="Toggle Tracking">📡 GPS On</button>
+      <button id="btnExport" class="btn" title="Export Progress">📤 Export Data</button>
+      <button id="btnImport" class="btn" title="Import Progress">📥 Import Data</button>
+    </div>
   </div>
+
+  <!-- Hidden File Input for Import -->
+  <input type="file" id="fileInput" accept=".json,application/json" style="display: none;" />
 
   <script type="module" src="/src/main.js"></script>
 </body>
