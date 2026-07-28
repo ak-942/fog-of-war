@@ -1,15 +1,16 @@
 import { registerPlugin } from '@capacitor/core';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { latLngToCell } from 'h3-js';
-import { FogEngine } from './fogEngine.js'; 
+import { latLngToCell, isValidCell } from 'h3-js';
+import { FogEngine } from './fogengine.js';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
 // --- Configuration Constants ---
-// Resolution 10 = ~130m across (Resolution 11 = ~50m across)
-const H3_RESOLUTION = 12; 
+// Resolution 11 (~50m hexes). Change to 12 for finer ~20m granularity.
+const H3_RESOLUTION = 11; 
 const STORAGE_KEY = 'fog_unlocked_cells';
+const MAX_IMPORT_HEXES = 200000; // Cap set to 200,000 hexes (~10,000 km of roads)
 
 // --- LocalStorage Persistence Helpers ---
 function loadSavedHexes() {
@@ -42,12 +43,10 @@ const canvas = document.getElementById('fog-canvas');
 const fogEngine = new FogEngine(canvas, map);
 
 // App State
-let unlockedCells = loadSavedHexes(); // Loaded from disk on launch
+let unlockedCells = loadSavedHexes();
 let userMarker = null;
 let initialCenterDone = false;
 let isTrackingActive = true;
-
-// Track last position for custom speed calculation fallback
 let lastPosition = null;
 
 // Initial UI & Fog Render from stored memory
@@ -60,7 +59,7 @@ map.on('move', () => {
 
 // --- Distance Calculation (Haversine Formula in meters) ---
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth radius in meters
+  const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = 
@@ -76,7 +75,7 @@ function onLocationUpdate(position) {
   const { latitude, longitude } = position.coords;
   const now = position.timestamp || Date.now();
 
-  // Calculate speed fallback if native speed is null/zero
+  // Speed calculation fallback
   let currentSpeedMetersPerSec = position.coords.speed;
 
   if (lastPosition && (currentSpeedMetersPerSec === null || currentSpeedMetersPerSec === undefined || currentSpeedMetersPerSec === 0)) {
@@ -92,16 +91,13 @@ function onLocationUpdate(position) {
     }
   }
 
-  // Save current position as last position
   lastPosition = { latitude, longitude, timestamp: now };
 
-  // Center map on user for initial fix
   if (!initialCenterDone) {
     map.setView([latitude, longitude], 16);
     initialCenterDone = true;
   }
 
-  // Update or create location marker
   if (!userMarker) {
     userMarker = L.circleMarker([latitude, longitude], {
       radius: 8,
@@ -115,11 +111,11 @@ function onLocationUpdate(position) {
     userMarker.setLatLng([latitude, longitude]);
   }
 
-  // Unlock smaller H3 Cell (Resolution 10)
+  // Unlock current H3 Cell
   const currentCell = latLngToCell(latitude, longitude, H3_RESOLUTION);
   if (!unlockedCells.has(currentCell)) {
     unlockedCells.add(currentCell);
-    saveHexes(unlockedCells); // Save immediately to disk
+    saveHexes(unlockedCells);
   }
 
   updateUIStats(currentSpeedMetersPerSec);
@@ -194,16 +190,117 @@ document.getElementById('btnCenter')?.addEventListener('click', () => {
 
 document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
   isTrackingActive = !isTrackingActive;
-  e.currentTarget.classList.toggle('btn-active', isTrackingActive);
+  const btn = e.currentTarget;
+  btn.classList.toggle('btn-active', isTrackingActive);
+  btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 });
 
-document.getElementById('btnClear')?.addEventListener('click', () => {
-  if (confirm('Are you sure you want to clear your unlocked fog progress?')) {
-    unlockedCells.clear();
-    localStorage.removeItem(STORAGE_KEY);
-    updateUIStats(0);
-    fogEngine.render([]);
+// --- 5. Export & Import Feature ---
+document.getElementById('btnExport')?.addEventListener('click', () => {
+  if (unlockedCells.size === 0) {
+    alert('No unlocked areas to export yet!');
+    return;
   }
+
+  const exportData = {
+    app: 'fog-of-war',
+    exportedAt: new Date().toISOString(),
+    hexes: Array.from(unlockedCells)
+  };
+
+  const jsonString = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `fog_of_war_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+const fileInput = document.getElementById('fileInput');
+
+document.getElementById('btnImport')?.addEventListener('click', () => {
+  fileInput?.click();
+});
+
+fileInput?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = (event) => {
+    try {
+      let rawText = event.target?.result;
+
+      if (!rawText || typeof rawText !== 'string') {
+        throw new Error('File is empty or unreadable.');
+      }
+
+      // Strip UTF-8 Byte Order Mark (BOM) if present
+      if (rawText.charCodeAt(0) === 0xFEFF) {
+        rawText = rawText.slice(1);
+      }
+      rawText = rawText.trim();
+
+      // Step 1: Safe JSON Parse
+      const parsed = JSON.parse(rawText);
+
+      // Step 2: Signature Validation
+      if (!parsed || parsed.app !== 'fog-of-war' || !Array.isArray(parsed.hexes)) {
+        alert('Invalid or incompatible Fog of War backup file.');
+        return;
+      }
+
+      // Step 3: Non-empty Check
+      if (parsed.hexes.length === 0) {
+        alert('The backup file contains no hex data.');
+        return;
+      }
+
+      // Step 4: Max Count Check
+      if (parsed.hexes.length > MAX_IMPORT_HEXES) {
+        alert(`File contains too many hexes (${parsed.hexes.length}). Maximum allowed is ${MAX_IMPORT_HEXES}.`);
+        return;
+      }
+
+      // Step 5: Sanitize & Validate H3 Strings
+      const validHexes = [];
+      for (let item of parsed.hexes) {
+        if (typeof item === 'string') {
+          const cleanHex = item.trim().toLowerCase();
+          if (isValidCell(cleanHex)) {
+            validHexes.push(cleanHex);
+          }
+        }
+      }
+
+      if (validHexes.length === 0) {
+        alert('No valid H3 hexagon IDs found in the file.');
+        return;
+      }
+
+      // Step 6: Load into App & Re-render
+      unlockedCells = new Set(validHexes);
+      saveHexes(unlockedCells);
+      updateUIStats(0);
+      fogEngine.render(Array.from(unlockedCells));
+
+      alert(`Successfully imported ${validHexes.length} unlocked hexes!`);
+    } catch (err) {
+      console.error('Import failure:', err);
+      alert('Failed to import file. Please ensure it is a valid JSON backup file.');
+    } finally {
+      // Reset input so re-selecting the same file works again
+      e.target.value = '';
+    }
+  };
+
+  reader.readAsText(file);
 });
 
 startGPS();

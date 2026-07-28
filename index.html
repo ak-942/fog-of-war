@@ -2,42 +2,36 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>Fog of War Map</title>
-  
-  <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  
-  <!-- Custom App CSS -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Fog of War</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <div id="map"></div>
+  <canvas id="fog-canvas"></canvas>
 
-  <!-- Map & Fog Container -->
-  <div id="map-container"> 
-    <div id="map"></div>
-    <canvas id="fog-canvas"></canvas>
-  </div>
-
-  <!-- Floating Stats Panel -->
-  <div class="stats-card">
-    <div class="stat-item">
-      <span class="stat-value" id="unlockedCount">0</span>
-      <span class="stat-label">Hexes Unlocked</span>
+  <div class="ui-panel">
+    <div class="stats">
+      <div class="stat-box">
+        <span class="stat-label">Unlocked</span>
+        <span id="unlockedCount" class="stat-value">0</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-label">Speed</span>
+        <span id="speedDisplay" class="stat-value">0 km/h</span>
+      </div>
     </div>
-    <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-value" id="speedDisplay">0 km/h</span>
-      <span class="stat-label">Current Speed</span>
+
+    <div class="controls">
+      <button id="btnCenter" class="btn" title="Center Map">🎯 Center</button>
+      <button id="btnToggleTracking" class="btn btn-active" title="Toggle Tracking">📡 GPS On</button>
+      <button id="btnExport" class="btn" title="Export Progress">📤 Export</button>
+      <button id="btnImport" class="btn" title="Import Progress">📥 Import</button>
     </div>
   </div>
 
-  <!-- Control Buttons -->
-  <div class="controls">
-    <button id="btnCenter" class="btn" title="Center Map">🎯</button>
-    <button id="btnToggleTracking" class="btn btn-active" title="Toggle GPS">📡</button>
-    <button id="btnClear" class="btn btn-danger" title="Clear Progress">🗑️</button>
-  </div>
+  <!-- Hidden File Input for JSON Backup Import -->
+  <input type="file" id="fileInput" accept=".json,application/json" style="display: none;" />
 
   <script type="module" src="/src/main.js"></script>
 </body>

@@ -4,138 +4,107 @@
   padding: 0;
 }
 
-body, html {
+html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: #0b0e14;
-  color: #ffffff;
+  background-color: #000;
 }
 
-#map, .map-container {
-  width: 100vw;
-  height: 100vh;
-  margin: 0;
-  padding: 0;
-}
-
-#fog-canvas {
+#map {
+  width: 100%;
+  height: 100%;
   position: absolute;
   top: 0;
   left: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 400; /* Leaflet tiles sit at z-index ~200, so 400 puts fog on top */
-  pointer-events: none; /* VERY IMPORTANT: lets you still drag and zoom the map through the fog */
+  z-index: 1;
 }
 
-/* Floating Stats Card */
-.stats-card {
+#fog-canvas {
+  width: 100%;
+  height: 100%;
   position: absolute;
-  top: 16px;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.ui-panel {
+  position: absolute;
+  bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 1000;
+  z-index: 10;
   display: flex;
-  align-items: center;
-  background: rgba(18, 22, 31, 0.85);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
-  padding: 10px 20px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  flex-direction: column;
+  gap: 10px;
+  width: 90%;
+  max-width: 400px;
 }
 
-.stat-item {
+.stats {
+  display: flex;
+  justify-content: space-around;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border-radius: 12px;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.stat-box {
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-
-.stat-value {
-  font-size: 16px;
-  font-weight: 700;
-  color: #38bdf8;
 }
 
 .stat-label {
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
   color: #94a3b8;
-  margin-top: 2px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
-.stat-divider {
-  width: 1px;
-  height: 24px;
-  background: rgba(255, 255, 255, 0.15);
-  margin: 0 16px;
+.stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f8fafc;
 }
 
-/* Control Buttons */
 .controls {
-  position: absolute;
-  bottom: 24px;
-  right: 20px;
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
 }
 
 .btn {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  color: #f8fafc;
   border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(18, 22, 31, 0.85);
-  backdrop-filter: blur(10px);
-  font-size: 20px;
+  padding: 12px 8px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  gap: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   transition: all 0.2s ease;
+  user-select: none;
 }
 
 .btn:active {
-  transform: scale(0.92);
+  transform: scale(0.96);
 }
 
 .btn-active {
-  border-color: #38bdf8;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
-}
-
-.btn-danger {
-  border-color: rgba(239, 68, 68, 0.4);
-}
-
-/* Container positioning */
-#map-container {
-  position: relative;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-}
-
-/* Force map to take up full screen */
-#map {
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-}
-
-/* Position fog canvas directly on top of map tiles */
-#fog-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 400;          /* Higher than Leaflet tiles (~200) */
-  pointer-events: none;  /* Allows touch/drag/zoom actions to pass through to the map */
+  background: rgba(16, 185, 129, 0.85);
+  border-color: rgba(52, 211, 153, 0.3);
 }
