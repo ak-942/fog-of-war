@@ -4,26 +4,33 @@ on:
   push:
     branches: [ main, master ]
 
+env:
+  # Force runner JavaScript actions to execute on Node.js 24 runtime
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '21'
+          cache: 'gradle'
 
       - name: Install dependencies & Build
         run: |
-          npm install
+          npm ci
           npm run build
           npx cap sync
 
