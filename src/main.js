@@ -2,7 +2,7 @@ import { registerPlugin } from '@capacitor/core';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
-import { FogEngine } from './fogengine.js';
+import { FogEngine } from './fogEngine.js';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
