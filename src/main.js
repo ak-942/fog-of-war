@@ -1,50 +1,158 @@
 import { registerPlugin } from '@capacitor/core';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { latLngToCell } from 'h3-js';
-import { FogEngine } from './fogEngine.js'; 
+import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
+import { FogEngine } from './fogEngine.js';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
-// --- 1. Map & Fog Engine Setup ---
-// Initialize map (starts centered at a default location)
-const map = L.map('map').setView([22.7196, 75.8577], 15);
+// --- Configuration Constants ---
+const H3_RESOLUTION = 11; 
+const STORAGE_KEY = 'fog_unlocked_cells';
+const MAX_IMPORT_HEXES = 200000;
 
-// Add OpenStreetMap tile layer
+// Safety Guardrail Thresholds
+const MAX_ACCURACY_METERS = 35;      // Reject GPS fixes with accuracy worse than 35m
+const MIN_JITTER_DISTANCE_M = 3;     // Ignore micro-movements under 3 meters (fixes desk jitter)
+const MAX_CHAIN_DISTANCE_M = 300;    // Max jump distance allowed for hex chaining (prevents shortcut lines)
+const MAX_GRID_STEPS = 40;           // Max H3 hex steps allowed for path computation (prevents lag)
+
+// --- LocalStorage Helpers ---
+function loadSavedHexes() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? new Set(JSON.parse(saved)) : new Set();
+  } catch (e) {
+    console.error('Failed to load saved fog data:', e);
+    return new Set();
+  }
+}
+
+function saveHexes(hexSet) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(hexSet)));
+  } catch (e) {
+    console.error('Failed to save fog data:', e);
+  }
+}
+
+// --- Map & Fog Engine Setup ---
+const map = L.map('map').setView([22.7196, 75.8577], 16);
+
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap'
 }).addTo(map);
 
-// Canvas overlay initialization
 const canvas = document.getElementById('fog-canvas');
 const fogEngine = new FogEngine(canvas, map);
 
 // App State
-let unlockedCells = new Set(); // Using a Set to avoid duplicate hexes
+let unlockedCells = loadSavedHexes();
 let userMarker = null;
 let initialCenterDone = false;
 let isTrackingActive = true;
+let lastPosition = null;
+let lastValidCell = null;
+let speedHistory = []; // Buffer for rolling speed average
 
-// Initial fog render (covers entire map)
+// Initial Render
+updateUIStats(0);
 fogEngine.render(Array.from(unlockedCells));
 
-// Re-render fog smoothly on pan/zoom
 map.on('move', () => {
   fogEngine.render(Array.from(unlockedCells));
 });
 
-// --- 2. Location Update Handler ---
-function onLocationUpdate(position) {
-  const { latitude, longitude, speed } = position.coords;
+// --- Distance Calculation (Haversine Formula) ---
+function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
-  // A. Center map on user for the first fix
+// --- Auto-Hole Filling (Fills Trapped "Donut" Hexes) ---
+function fillTrappedHoles(newlyUnlocked, unlockedSet) {
+  let queue = Array.from(newlyUnlocked);
+
+  while (queue.length > 0) {
+    const nextQueue = [];
+    for (const cell of queue) {
+      // Get 1-ring surrounding neighbors
+      const kRing = gridDisk(cell, 1);
+      for (const neighbor of kRing) {
+        if (!unlockedSet.has(neighbor)) {
+          // Check neighbor's surrounding 6 cells
+          const neighborRing = gridDisk(neighbor, 1).filter(c => c !== neighbor);
+          let unlockedCount = 0;
+          for (const n of neighborRing) {
+            if (unlockedSet.has(n)) unlockedCount++;
+          }
+          // If 5 or 6 surrounding neighbors are unlocked, auto-clear the center hole
+          if (unlockedCount >= 5) {
+            unlockedSet.add(neighbor);
+            nextQueue.push(neighbor);
+          }
+        }
+      }
+    }
+    queue = nextQueue;
+  }
+}
+
+// --- Location Update Handler ---
+function onLocationUpdate(position) {
+  const { latitude, longitude, accuracy, speed } = position.coords;
+  const now = position.timestamp || Date.now();
+
+  // Guardrail 1: Accuracy Filter
+  if (accuracy && accuracy > MAX_ACCURACY_METERS) {
+    console.warn(`GPS fix rejected: accuracy (${Math.round(accuracy)}m) exceeds ${MAX_ACCURACY_METERS}m limit.`);
+    return;
+  }
+
+  let distanceMoved = 0;
+  let rawSpeedMetersPerSec = 0;
+
+  if (lastPosition) {
+    const timeElapsedSec = (now - lastPosition.timestamp) / 1000;
+    distanceMoved = calculateDistanceMeters(
+      lastPosition.latitude,
+      lastPosition.longitude,
+      latitude,
+      longitude
+    );
+
+    // Filter Micro-Jitter (ignore movements < 3m)
+    if (distanceMoved < MIN_JITTER_DISTANCE_M) {
+      rawSpeedMetersPerSec = 0;
+    } else if (timeElapsedSec > 0.5) {
+      rawSpeedMetersPerSec = distanceMoved / timeElapsedSec;
+    } else {
+      rawSpeedMetersPerSec = speed || 0;
+    }
+  } else if (speed !== null && speed !== undefined) {
+    rawSpeedMetersPerSec = speed;
+  }
+
+  lastPosition = { latitude, longitude, timestamp: now };
+
+  // Speed Smoothing: Rolling 3-Sample Average
+  speedHistory.push(rawSpeedMetersPerSec);
+  if (speedHistory.length > 3) speedHistory.shift();
+  const smoothedSpeed = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
+
   if (!initialCenterDone) {
     map.setView([latitude, longitude], 16);
     initialCenterDone = true;
   }
 
-  // B. Update or create user location marker
   if (!userMarker) {
     userMarker = L.circleMarker([latitude, longitude], {
       radius: 8,
@@ -58,48 +166,80 @@ function onLocationUpdate(position) {
     userMarker.setLatLng([latitude, longitude]);
   }
 
-  // C. Unlock H3 Cell at current GPS location (Resolution 9 = ~100m hex)
-  const currentCell = latLngToCell(latitude, longitude, 9);
-  if (!unlockedCells.has(currentCell)) {
-    unlockedCells.add(currentCell);
-    updateUIStats(speed);
+  // --- Hex Unlocking & Chaining ---
+  const currentCell = latLngToCell(latitude, longitude, H3_RESOLUTION);
+  const newlyUnlocked = new Set();
+
+  if (lastValidCell && lastValidCell !== currentCell) {
+    // Check Chaining Guardrails
+    const canChain = 
+      distanceMoved <= MAX_CHAIN_DISTANCE_M && 
+      gridDistance(lastValidCell, currentCell) <= MAX_GRID_STEPS;
+
+    if (canChain) {
+      try {
+        // Calculate intermediate hexes between previous location and current
+        const chainedHexes = gridPathCells(lastValidCell, currentCell);
+        for (const hex of chainedHexes) {
+          if (!unlockedCells.has(hex)) {
+            unlockedCells.add(hex);
+            newlyUnlocked.add(hex);
+          }
+        }
+      } catch (err) {
+        console.warn('Grid path calculation failed, unlocking current cell only:', err);
+        if (!unlockedCells.has(currentCell)) {
+          unlockedCells.add(currentCell);
+          newlyUnlocked.add(currentCell);
+        }
+      }
+    } else {
+      // Big gap or teleportation detected: unlock current cell only without chaining
+      if (!unlockedCells.has(currentCell)) {
+        unlockedCells.add(currentCell);
+        newlyUnlocked.add(currentCell);
+      }
+    }
+  } else {
+    if (!unlockedCells.has(currentCell)) {
+      unlockedCells.add(currentCell);
+      newlyUnlocked.add(currentCell);
+    }
   }
 
-  // D. Redraw Fog Overlay
+  lastValidCell = currentCell;
+
+  // Auto-Fill Trapped Holes if any new hexes were unlocked
+  if (newlyUnlocked.size > 0) {
+    fillTrappedHoles(newlyUnlocked, unlockedCells);
+    saveHexes(unlockedCells);
+  }
+
+  updateUIStats(smoothedSpeed);
   fogEngine.render(Array.from(unlockedCells));
 }
 
-// Update DOM elements from index.html
 function updateUIStats(speedMetersPerSec) {
   const countDisplay = document.getElementById('unlockedCount');
   const speedDisplay = document.getElementById('speedDisplay');
 
-  if (countDisplay) {
-    countDisplay.textContent = unlockedCells.size;
-  }
-
+  if (countDisplay) countDisplay.textContent = unlockedCells.size;
   if (speedDisplay) {
-    // Convert m/s to km/h
-    const kmh = speedMetersPerSec ? Math.round(speedMetersPerSec * 3.6) : 0;
+    const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
     speedDisplay.textContent = `${kmh} km/h`;
   }
 }
 
-// --- 3. Request Location & Start Tracking ---
+// --- GPS Watcher ---
 async function startGPS() {
-  // Web Browser Geolocation Standard Prompt
   if ('geolocation' in navigator) {
     navigator.geolocation.getCurrentPosition(
       (pos) => onLocationUpdate(pos),
-      (err) => {
-        console.warn('Initial web location prompt denied or failed:', err);
-        alert('Please allow location access in your browser settings to reveal the map fog!');
-      },
+      (err) => console.warn('Web initial location warning:', err),
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }
 
-  // Mobile App Native Background Tracker
   try {
     await BackgroundGeolocation.addWatcher(
       {
@@ -107,30 +247,24 @@ async function startGPS() {
         backgroundTitle: "Fog of War Active",
         requestPermissions: true,
         stale: false,
-        distanceFilter: 5 // Trigger updates every 5 meters moved
+        distanceFilter: 3
       },
       (location, error) => {
-        if (error) {
-          if (error.code === "NOT_AUTHORIZED") {
-            alert("Please set Location permission to 'Allow All The Time' in settings.");
-          }
-          return;
-        }
-
+        if (error) return;
         if (location && isTrackingActive) {
           onLocationUpdate({
             coords: {
               latitude: location.latitude,
               longitude: location.longitude,
+              accuracy: location.accuracy,
               speed: location.speed
-            }
+            },
+            timestamp: location.time || Date.now()
           });
         }
       }
     );
   } catch (err) {
-    console.warn("Native Background Plugin not available, using web fallback:", err);
-    // Web Watcher Fallback
     navigator.geolocation.watchPosition(
       (pos) => {
         if (isTrackingActive) onLocationUpdate(pos);
@@ -141,25 +275,141 @@ async function startGPS() {
   }
 }
 
-// --- 4. Button Controls Setup ---
+// --- Sidebar Menu Logic ---
+const btnMenu = document.getElementById('btnMenu');
+const btnCloseSidebar = document.getElementById('btnCloseSidebar');
+const sidebar = document.getElementById('sidebar');
+const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+function openSidebar() {
+  sidebar?.classList.add('open');
+  sidebarOverlay?.classList.add('active');
+}
+
+function closeSidebar() {
+  sidebar?.classList.remove('open');
+  sidebarOverlay?.classList.remove('active');
+}
+
+btnMenu?.addEventListener('click', openSidebar);
+btnCloseSidebar?.addEventListener('click', closeSidebar);
+sidebarOverlay?.addEventListener('click', closeSidebar);
+
+// --- Controls ---
 document.getElementById('btnCenter')?.addEventListener('click', () => {
   if (userMarker) {
     map.setView(userMarker.getLatLng(), 16);
   }
+  closeSidebar();
 });
 
 document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
   isTrackingActive = !isTrackingActive;
-  e.currentTarget.classList.toggle('btn-active', isTrackingActive);
+  const btn = e.currentTarget;
+  btn.classList.toggle('btn-active', isTrackingActive);
+  btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 });
 
-document.getElementById('btnClear')?.addEventListener('click', () => {
-  if (confirm('Are you sure you want to clear your unlocked fog progress?')) {
-    unlockedCells.clear();
-    updateUIStats(0);
-    fogEngine.render([]);
+// --- Export & Import ---
+document.getElementById('btnExport')?.addEventListener('click', () => {
+  closeSidebar();
+  if (unlockedCells.size === 0) {
+    alert('No unlocked areas to export yet!');
+    return;
   }
+
+  const exportData = {
+    app: 'fog-of-war',
+    exportedAt: new Date().toISOString(),
+    hexes: Array.from(unlockedCells)
+  };
+
+  const jsonString = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `fog_of_war_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 });
 
-// Immediately initiate location request on app launch
+const fileInput = document.getElementById('fileInput');
+
+document.getElementById('btnImport')?.addEventListener('click', () => {
+  closeSidebar();
+  fileInput?.click();
+});
+
+fileInput?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = (event) => {
+    try {
+      let rawText = event.target?.result;
+
+      if (!rawText || typeof rawText !== 'string') {
+        throw new Error('File is empty or unreadable.');
+      }
+
+      if (rawText.charCodeAt(0) === 0xFEFF) {
+        rawText = rawText.slice(1);
+      }
+      rawText = rawText.trim();
+
+      const parsed = JSON.parse(rawText);
+
+      if (!parsed || parsed.app !== 'fog-of-war' || !Array.isArray(parsed.hexes)) {
+        alert('Invalid or incompatible Fog of War backup file.');
+        return;
+      }
+
+      if (parsed.hexes.length === 0) {
+        alert('The backup file contains no hex data.');
+        return;
+      }
+
+      if (parsed.hexes.length > MAX_IMPORT_HEXES) {
+        alert(`File contains too many hexes (${parsed.hexes.length}). Maximum allowed is ${MAX_IMPORT_HEXES}.`);
+        return;
+      }
+
+      const validHexes = [];
+      for (let item of parsed.hexes) {
+        if (typeof item === 'string') {
+          const cleanHex = item.trim().toLowerCase();
+          if (isValidCell(cleanHex)) {
+            validHexes.push(cleanHex);
+          }
+        }
+      }
+
+      if (validHexes.length === 0) {
+        alert('No valid H3 hexagon IDs found in the file.');
+        return;
+      }
+
+      unlockedCells = new Set(validHexes);
+      saveHexes(unlockedCells);
+      updateUIStats(0);
+      fogEngine.render(Array.from(unlockedCells));
+
+      alert(`Successfully imported ${validHexes.length} unlocked hexes!`);
+    } catch (err) {
+      console.error('Import failure:', err);
+      alert('Failed to import file. Please ensure it is a valid JSON backup file.');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  reader.readAsText(file);
+});
+
 startGPS();
