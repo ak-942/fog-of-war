@@ -58,6 +58,33 @@ html, body {
   transform: scale(0.95);
 }
 
+/* --- Bottom-Right Floating Action Button --- */
+.fab-btn {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  z-index: 10;
+  width: 52px;
+  height: 52px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  color: #f8fafc;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.fab-btn:active {
+  transform: scale(0.92);
+}
+
 /* --- Top Stats Bar --- */
 .top-stats-bar {
   position: absolute;
