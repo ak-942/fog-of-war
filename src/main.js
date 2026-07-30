@@ -1,4 +1,5 @@
 import { registerPlugin } from '@capacitor/core';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
@@ -12,10 +13,10 @@ const STORAGE_KEY = 'fog_unlocked_cells';
 const MAX_IMPORT_HEXES = 200000;
 
 // Safety Guardrail Thresholds
-const MAX_ACCURACY_METERS = 35;      // Reject GPS fixes with accuracy worse than 35m
-const MIN_JITTER_DISTANCE_M = 3;     // Ignore micro-movements under 3 meters (fixes desk jitter)
-const MAX_CHAIN_DISTANCE_M = 300;    // Max jump distance allowed for hex chaining (prevents shortcut lines)
-const MAX_GRID_STEPS = 40;           // Max H3 hex steps allowed for path computation (prevents lag)
+const MAX_ACCURACY_METERS = 35;
+const MIN_JITTER_DISTANCE_M = 3;
+const MAX_CHAIN_DISTANCE_M = 300;
+const MAX_GRID_STEPS = 40;
 
 // --- LocalStorage Helpers ---
 function loadSavedHexes() {
@@ -54,7 +55,7 @@ let initialCenterDone = false;
 let isTrackingActive = true;
 let lastPosition = null;
 let lastValidCell = null;
-let speedHistory = []; // Buffer for rolling speed average
+let speedHistory = [];
 
 // Initial Render
 updateUIStats(0);
@@ -84,17 +85,14 @@ function fillTrappedHoles(newlyUnlocked, unlockedSet) {
   while (queue.length > 0) {
     const nextQueue = [];
     for (const cell of queue) {
-      // Get 1-ring surrounding neighbors
       const kRing = gridDisk(cell, 1);
       for (const neighbor of kRing) {
         if (!unlockedSet.has(neighbor)) {
-          // Check neighbor's surrounding 6 cells
           const neighborRing = gridDisk(neighbor, 1).filter(c => c !== neighbor);
           let unlockedCount = 0;
           for (const n of neighborRing) {
             if (unlockedSet.has(n)) unlockedCount++;
           }
-          // If 5 or 6 surrounding neighbors are unlocked, auto-clear the center hole
           if (unlockedCount >= 5) {
             unlockedSet.add(neighbor);
             nextQueue.push(neighbor);
@@ -111,7 +109,6 @@ function onLocationUpdate(position) {
   const { latitude, longitude, accuracy, speed } = position.coords;
   const now = position.timestamp || Date.now();
 
-  // Guardrail 1: Accuracy Filter
   if (accuracy && accuracy > MAX_ACCURACY_METERS) {
     console.warn(`GPS fix rejected: accuracy (${Math.round(accuracy)}m) exceeds ${MAX_ACCURACY_METERS}m limit.`);
     return;
@@ -129,7 +126,6 @@ function onLocationUpdate(position) {
       longitude
     );
 
-    // Filter Micro-Jitter (ignore movements < 3m)
     if (distanceMoved < MIN_JITTER_DISTANCE_M) {
       rawSpeedMetersPerSec = 0;
     } else if (timeElapsedSec > 0.5) {
@@ -143,7 +139,6 @@ function onLocationUpdate(position) {
 
   lastPosition = { latitude, longitude, timestamp: now };
 
-  // Speed Smoothing: Rolling 3-Sample Average
   speedHistory.push(rawSpeedMetersPerSec);
   if (speedHistory.length > 3) speedHistory.shift();
   const smoothedSpeed = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
@@ -166,19 +161,16 @@ function onLocationUpdate(position) {
     userMarker.setLatLng([latitude, longitude]);
   }
 
-  // --- Hex Unlocking & Chaining ---
   const currentCell = latLngToCell(latitude, longitude, H3_RESOLUTION);
   const newlyUnlocked = new Set();
 
   if (lastValidCell && lastValidCell !== currentCell) {
-    // Check Chaining Guardrails
     const canChain = 
       distanceMoved <= MAX_CHAIN_DISTANCE_M && 
       gridDistance(lastValidCell, currentCell) <= MAX_GRID_STEPS;
 
     if (canChain) {
       try {
-        // Calculate intermediate hexes between previous location and current
         const chainedHexes = gridPathCells(lastValidCell, currentCell);
         for (const hex of chainedHexes) {
           if (!unlockedCells.has(hex)) {
@@ -194,7 +186,6 @@ function onLocationUpdate(position) {
         }
       }
     } else {
-      // Big gap or teleportation detected: unlock current cell only without chaining
       if (!unlockedCells.has(currentCell)) {
         unlockedCells.add(currentCell);
         newlyUnlocked.add(currentCell);
@@ -209,7 +200,6 @@ function onLocationUpdate(position) {
 
   lastValidCell = currentCell;
 
-  // Auto-Fill Trapped Holes if any new hexes were unlocked
   if (newlyUnlocked.size > 0) {
     fillTrappedHoles(newlyUnlocked, unlockedCells);
     saveHexes(unlockedCells);
@@ -299,8 +289,9 @@ sidebarOverlay?.addEventListener('click', closeSidebar);
 document.getElementById('btnCenter')?.addEventListener('click', () => {
   if (userMarker) {
     map.setView(userMarker.getLatLng(), 16);
+  } else {
+    alert('Waiting for GPS position...');
   }
-  closeSidebar();
 });
 
 document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
@@ -310,33 +301,56 @@ document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
   btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 });
 
-// --- Export & Import ---
-document.getElementById('btnExport')?.addEventListener('click', () => {
+// --- Export Function (Native Filesystem + Web Fallback) ---
+document.getElementById('btnExport')?.addEventListener('click', async () => {
   closeSidebar();
   if (unlockedCells.size === 0) {
     alert('No unlocked areas to export yet!');
     return;
   }
 
+  const fileName = `fog_of_war_backup_${new Date().toISOString().slice(0, 10)}.json`;
   const exportData = {
     app: 'fog-of-war',
     exportedAt: new Date().toISOString(),
     hexes: Array.from(unlockedCells)
   };
-
   const jsonString = JSON.stringify(exportData, null, 2);
-  const blob = new Blob([jsonString], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
 
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `fog_of_war_backup_${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    // Save natively into device's Documents directory via Capacitor Filesystem
+    await Filesystem.writeFile({
+      path: fileName,
+      data: jsonString,
+      directory: Directory.Documents,
+      encoding: Encoding.UTF8
+    });
+    alert(`Export successful!\n\nSaved to: Documents/${fileName}`);
+  } catch (nativeErr) {
+    console.warn('Native filesystem write failed, trying web download fallback:', nativeErr);
+    
+    // Fallback for Web Browser
+    try {
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      alert('Export successful!');
+    } catch (webErr) {
+      console.error('Export error:', webErr);
+      alert(`Export failed: ${webErr.message || 'Unable to save backup file.'}`);
+    }
+  }
 });
 
+// --- Import Function ---
 const fileInput = document.getElementById('fileInput');
 
 document.getElementById('btnImport')?.addEventListener('click', () => {
