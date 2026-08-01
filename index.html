@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Fog of War</title>
+  <title>Explore</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -13,11 +13,16 @@
   <!-- Hamburger Menu Icon -->
   <button id="btnMenu" class="hamburger-btn" aria-label="Open Menu">☰</button>
 
-  <!-- Top Stats Bar -->
+  <!-- Top Stats Bar (Area | Distance | Speed) -->
   <div class="top-stats-bar">
     <div class="stat-box">
-      <span class="stat-label">Unlocked</span>
-      <span id="unlockedCount" class="stat-value">0</span>
+      <span class="stat-label">Area</span>
+      <span id="areaDisplay" class="stat-value">0 m²</span>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-box">
+      <span class="stat-label">Distance</span>
+      <span id="distanceDisplay" class="stat-value">0 m</span>
     </div>
     <div class="stat-divider"></div>
     <div class="stat-box">

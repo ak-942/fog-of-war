@@ -9,7 +9,9 @@ const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
 // --- Configuration Constants ---
 const H3_RESOLUTION = 11; 
+const H3_RES11_AREA_SQ_METERS = 2250; // Avg area of Res 11 Hex
 const STORAGE_KEY = 'fog_unlocked_cells';
+const DISTANCE_STORAGE_KEY = 'fog_total_distance_meters';
 const MAX_IMPORT_HEXES = 200000;
 
 // Safety Guardrail Thresholds
@@ -37,6 +39,24 @@ function saveHexes(hexSet) {
   }
 }
 
+function loadSavedDistance() {
+  try {
+    const saved = localStorage.getItem(DISTANCE_STORAGE_KEY);
+    return saved ? parseFloat(saved) : 0;
+  } catch (e) {
+    console.error('Failed to load saved distance:', e);
+    return 0;
+  }
+}
+
+function saveDistance(meters) {
+  try {
+    localStorage.setItem(DISTANCE_STORAGE_KEY, meters.toString());
+  } catch (e) {
+    console.error('Failed to save distance:', e);
+  }
+}
+
 // --- Map & Fog Engine Setup ---
 const map = L.map('map').setView([22.7196, 75.8577], 16);
 
@@ -50,6 +70,7 @@ const fogEngine = new FogEngine(canvas, map);
 
 // App State
 let unlockedCells = loadSavedHexes();
+let totalDistanceMeters = loadSavedDistance();
 let userMarker = null;
 let initialCenterDone = false;
 let isTrackingActive = true;
@@ -76,6 +97,35 @@ function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+}
+
+// --- Formatting Helpers ---
+function formatArea(hexCount) {
+  const totalAreaM2 = hexCount * H3_RES11_AREA_SQ_METERS;
+  if (totalAreaM2 >= 10000) {
+    return `${(totalAreaM2 / 1000000).toFixed(2)} km²`;
+  }
+  return `${Math.round(totalAreaM2).toLocaleString()} m²`;
+}
+
+function formatDistance(meters) {
+  if (meters >= 1000) {
+    return `${(meters / 1000).toFixed(2)} km`;
+  }
+  return `${Math.round(meters)} m`;
+}
+
+function updateUIStats(speedMetersPerSec) {
+  const areaDisplay = document.getElementById('areaDisplay');
+  const distanceDisplay = document.getElementById('distanceDisplay');
+  const speedDisplay = document.getElementById('speedDisplay');
+
+  if (areaDisplay) areaDisplay.textContent = formatArea(unlockedCells.size);
+  if (distanceDisplay) distanceDisplay.textContent = formatDistance(totalDistanceMeters);
+  if (speedDisplay) {
+    const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
+    speedDisplay.textContent = `${kmh} km/h`;
+  }
 }
 
 // --- Auto-Hole Filling (Fills Trapped "Donut" Hexes) ---
@@ -128,10 +178,16 @@ function onLocationUpdate(position) {
 
     if (distanceMoved < MIN_JITTER_DISTANCE_M) {
       rawSpeedMetersPerSec = 0;
-    } else if (timeElapsedSec > 0.5) {
-      rawSpeedMetersPerSec = distanceMoved / timeElapsedSec;
     } else {
-      rawSpeedMetersPerSec = speed || 0;
+      // Accumulate valid distance moved
+      totalDistanceMeters += distanceMoved;
+      saveDistance(totalDistanceMeters);
+
+      if (timeElapsedSec > 0.5) {
+        rawSpeedMetersPerSec = distanceMoved / timeElapsedSec;
+      } else {
+        rawSpeedMetersPerSec = speed || 0;
+      }
     }
   } else if (speed !== null && speed !== undefined) {
     rawSpeedMetersPerSec = speed;
@@ -209,17 +265,6 @@ function onLocationUpdate(position) {
   fogEngine.render(Array.from(unlockedCells));
 }
 
-function updateUIStats(speedMetersPerSec) {
-  const countDisplay = document.getElementById('unlockedCount');
-  const speedDisplay = document.getElementById('speedDisplay');
-
-  if (countDisplay) countDisplay.textContent = unlockedCells.size;
-  if (speedDisplay) {
-    const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
-    speedDisplay.textContent = `${kmh} km/h`;
-  }
-}
-
 // --- GPS Watcher ---
 async function startGPS() {
   if ('geolocation' in navigator) {
@@ -234,7 +279,7 @@ async function startGPS() {
     await BackgroundGeolocation.addWatcher(
       {
         backgroundMessage: "Tracking your explored areas in background...",
-        backgroundTitle: "Fog of War Active",
+        backgroundTitle: "Explore Active",
         requestPermissions: true,
         stale: false,
         distanceFilter: 3
@@ -265,7 +310,7 @@ async function startGPS() {
   }
 }
 
-// --- Sidebar Menu Logic ---
+// --- Sidebar Drawer Logic ---
 const btnMenu = document.getElementById('btnMenu');
 const btnCloseSidebar = document.getElementById('btnCloseSidebar');
 const sidebar = document.getElementById('sidebar');
@@ -301,35 +346,35 @@ document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
   btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 });
 
-// --- Export Function (Native Filesystem + Web Fallback) ---
+// --- Export Function (Saves directly to Download/ Folder) ---
 document.getElementById('btnExport')?.addEventListener('click', async () => {
   closeSidebar();
-  if (unlockedCells.size === 0) {
-    alert('No unlocked areas to export yet!');
+  if (unlockedCells.size === 0 && totalDistanceMeters === 0) {
+    alert('No explored areas or distance to export yet!');
     return;
   }
 
-  const fileName = `fog_of_war_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  const fileName = `explore_backup_${new Date().toISOString().slice(0, 10)}.json`;
   const exportData = {
     app: 'fog-of-war',
     exportedAt: new Date().toISOString(),
+    totalDistanceMeters: totalDistanceMeters,
     hexes: Array.from(unlockedCells)
   };
   const jsonString = JSON.stringify(exportData, null, 2);
 
   try {
-    // Save natively into device's Documents directory via Capacitor Filesystem
+    // Write directly into public Downloads folder on device
     await Filesystem.writeFile({
-      path: fileName,
+      path: `Download/${fileName}`,
+      directory: Directory.ExternalStorage,
       data: jsonString,
-      directory: Directory.Documents,
       encoding: Encoding.UTF8
     });
-    alert(`Export successful!\n\nSaved to: Documents/${fileName}`);
+    alert(`Export successful!\n\nSaved to: Downloads/${fileName}`);
   } catch (nativeErr) {
-    console.warn('Native filesystem write failed, trying web download fallback:', nativeErr);
-    
-    // Fallback for Web Browser
+    console.warn('Native filesystem write to Download failed, trying web fallback:', nativeErr);
+
     try {
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -341,7 +386,7 @@ document.getElementById('btnExport')?.addEventListener('click', async () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
+
       alert('Export successful!');
     } catch (webErr) {
       console.error('Export error:', webErr);
@@ -380,7 +425,7 @@ fileInput?.addEventListener('change', (e) => {
       const parsed = JSON.parse(rawText);
 
       if (!parsed || parsed.app !== 'fog-of-war' || !Array.isArray(parsed.hexes)) {
-        alert('Invalid or incompatible Fog of War backup file.');
+        alert('Invalid or incompatible Explore backup file.');
         return;
       }
 
@@ -409,12 +454,20 @@ fileInput?.addEventListener('change', (e) => {
         return;
       }
 
+      // Restore Hexes
       unlockedCells = new Set(validHexes);
       saveHexes(unlockedCells);
+
+      // Restore Distance if available
+      if (typeof parsed.totalDistanceMeters === 'number' && !isNaN(parsed.totalDistanceMeters)) {
+        totalDistanceMeters = parsed.totalDistanceMeters;
+        saveDistance(totalDistanceMeters);
+      }
+
       updateUIStats(0);
       fogEngine.render(Array.from(unlockedCells));
 
-      alert(`Successfully imported ${validHexes.length} unlocked hexes!`);
+      alert(`Successfully imported ${validHexes.length} unlocked hexes and distance data!`);
     } catch (err) {
       console.error('Import failure:', err);
       alert('Failed to import file. Please ensure it is a valid JSON backup file.');
