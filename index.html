@@ -13,7 +13,7 @@
   <!-- Hamburger Menu Icon -->
   <button id="btnMenu" class="hamburger-btn" aria-label="Open Menu">☰</button>
 
-  <!-- Top Stats Bar (Area | Distance | Speed) -->
+  <!-- Top Stats Bar (Area | Trip Distance | Speed) -->
   <div class="top-stats-bar">
     <div class="stat-box">
       <span class="stat-label">Area</span>
@@ -43,8 +43,16 @@
       <h2>Menu</h2>
       <button id="btnCloseSidebar" class="close-btn">&times;</button>
     </div>
+
+    <!-- Lifetime Distance Card inside Sidebar -->
+    <div class="sidebar-stat-card">
+      <span class="sidebar-stat-label">Overall Distance</span>
+      <span id="lifetimeDistanceDisplay" class="sidebar-stat-value">0 m</span>
+    </div>
+
     <div class="controls-vertical">
       <button id="btnToggleTracking" class="btn btn-active" title="Toggle Tracking">📡 GPS On</button>
+      <button id="btnResetTrip" class="btn" title="Reset Trip Distance">🔄 Reset Trip</button>
       <button id="btnExport" class="btn" title="Export Progress">📤 Export Data</button>
       <button id="btnImport" class="btn" title="Import Progress">📥 Import Data</button>
     </div>
