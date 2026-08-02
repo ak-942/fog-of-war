@@ -11,7 +11,8 @@ const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 const H3_RESOLUTION = 11; 
 const H3_RES11_AREA_SQ_METERS = 2250; // Avg area of Res 11 Hex
 const STORAGE_KEY = 'fog_unlocked_cells';
-const DISTANCE_STORAGE_KEY = 'fog_total_distance_meters';
+const TRIP_DISTANCE_KEY = 'fog_trip_distance_meters';
+const LIFETIME_DISTANCE_KEY = 'fog_lifetime_distance_meters';
 const MAX_IMPORT_HEXES = 200000;
 
 // Safety Guardrail Thresholds
@@ -39,21 +40,41 @@ function saveHexes(hexSet) {
   }
 }
 
-function loadSavedDistance() {
+function loadSavedTripDistance() {
   try {
-    const saved = localStorage.getItem(DISTANCE_STORAGE_KEY);
+    const saved = localStorage.getItem(TRIP_DISTANCE_KEY);
     return saved ? parseFloat(saved) : 0;
   } catch (e) {
-    console.error('Failed to load saved distance:', e);
     return 0;
   }
 }
 
-function saveDistance(meters) {
+function saveTripDistance(meters) {
   try {
-    localStorage.setItem(DISTANCE_STORAGE_KEY, meters.toString());
+    localStorage.setItem(TRIP_DISTANCE_KEY, meters.toString());
   } catch (e) {
-    console.error('Failed to save distance:', e);
+    console.error('Failed to save trip distance:', e);
+  }
+}
+
+function loadSavedLifetimeDistance() {
+  try {
+    const saved = localStorage.getItem(LIFETIME_DISTANCE_KEY);
+    if (saved) return parseFloat(saved);
+
+    // Migration Fallback: If legacy single distance key exists
+    const legacySaved = localStorage.getItem('fog_total_distance_meters');
+    return legacySaved ? parseFloat(legacySaved) : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function saveLifetimeDistance(meters) {
+  try {
+    localStorage.setItem(LIFETIME_DISTANCE_KEY, meters.toString());
+  } catch (e) {
+    console.error('Failed to save lifetime distance:', e);
   }
 }
 
@@ -70,7 +91,8 @@ const fogEngine = new FogEngine(canvas, map);
 
 // App State
 let unlockedCells = loadSavedHexes();
-let totalDistanceMeters = loadSavedDistance();
+let tripDistanceMeters = loadSavedTripDistance();
+let lifetimeDistanceMeters = loadSavedLifetimeDistance();
 let userMarker = null;
 let initialCenterDone = false;
 let isTrackingActive = true;
@@ -119,9 +141,11 @@ function updateUIStats(speedMetersPerSec) {
   const areaDisplay = document.getElementById('areaDisplay');
   const distanceDisplay = document.getElementById('distanceDisplay');
   const speedDisplay = document.getElementById('speedDisplay');
+  const lifetimeDisplay = document.getElementById('lifetimeDistanceDisplay');
 
   if (areaDisplay) areaDisplay.textContent = formatArea(unlockedCells.size);
-  if (distanceDisplay) distanceDisplay.textContent = formatDistance(totalDistanceMeters);
+  if (distanceDisplay) distanceDisplay.textContent = formatDistance(tripDistanceMeters);
+  if (lifetimeDisplay) lifetimeDisplay.textContent = formatDistance(lifetimeDistanceMeters);
   if (speedDisplay) {
     const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
     speedDisplay.textContent = `${kmh} km/h`;
@@ -179,9 +203,12 @@ function onLocationUpdate(position) {
     if (distanceMoved < MIN_JITTER_DISTANCE_M) {
       rawSpeedMetersPerSec = 0;
     } else {
-      // Accumulate valid distance moved
-      totalDistanceMeters += distanceMoved;
-      saveDistance(totalDistanceMeters);
+      // Accumulate distance for both Trip and Lifetime counters
+      tripDistanceMeters += distanceMoved;
+      lifetimeDistanceMeters += distanceMoved;
+
+      saveTripDistance(tripDistanceMeters);
+      saveLifetimeDistance(lifetimeDistanceMeters);
 
       if (timeElapsedSec > 0.5) {
         rawSpeedMetersPerSec = distanceMoved / timeElapsedSec;
@@ -346,10 +373,25 @@ document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
   btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 });
 
-// --- Export Function (Saves directly to Download/ Folder) ---
+// Reset Trip Distance Handler
+document.getElementById('btnResetTrip')?.addEventListener('click', () => {
+  if (tripDistanceMeters === 0) {
+    alert('Trip distance is already 0 m.');
+    return;
+  }
+
+  if (confirm('Reset current trip distance to 0? (Overall distance will be kept)')) {
+    tripDistanceMeters = 0;
+    saveTripDistance(0);
+    updateUIStats(0);
+    closeSidebar();
+  }
+});
+
+// --- Export Function ---
 document.getElementById('btnExport')?.addEventListener('click', async () => {
   closeSidebar();
-  if (unlockedCells.size === 0 && totalDistanceMeters === 0) {
+  if (unlockedCells.size === 0 && lifetimeDistanceMeters === 0) {
     alert('No explored areas or distance to export yet!');
     return;
   }
@@ -358,13 +400,13 @@ document.getElementById('btnExport')?.addEventListener('click', async () => {
   const exportData = {
     app: 'fog-of-war',
     exportedAt: new Date().toISOString(),
-    totalDistanceMeters: totalDistanceMeters,
+    tripDistanceMeters: tripDistanceMeters,
+    lifetimeDistanceMeters: lifetimeDistanceMeters,
     hexes: Array.from(unlockedCells)
   };
   const jsonString = JSON.stringify(exportData, null, 2);
 
   try {
-    // Write directly into public Downloads folder on device
     await Filesystem.writeFile({
       path: `Download/${fileName}`,
       directory: Directory.ExternalStorage,
@@ -458,10 +500,19 @@ fileInput?.addEventListener('change', (e) => {
       unlockedCells = new Set(validHexes);
       saveHexes(unlockedCells);
 
-      // Restore Distance if available
-      if (typeof parsed.totalDistanceMeters === 'number' && !isNaN(parsed.totalDistanceMeters)) {
-        totalDistanceMeters = parsed.totalDistanceMeters;
-        saveDistance(totalDistanceMeters);
+      // Restore Trip Distance if present
+      if (typeof parsed.tripDistanceMeters === 'number' && !isNaN(parsed.tripDistanceMeters)) {
+        tripDistanceMeters = parsed.tripDistanceMeters;
+        saveTripDistance(tripDistanceMeters);
+      }
+
+      // Restore Lifetime Distance if present (or legacy totalDistanceMeters)
+      if (typeof parsed.lifetimeDistanceMeters === 'number' && !isNaN(parsed.lifetimeDistanceMeters)) {
+        lifetimeDistanceMeters = parsed.lifetimeDistanceMeters;
+        saveLifetimeDistance(lifetimeDistanceMeters);
+      } else if (typeof parsed.totalDistanceMeters === 'number' && !isNaN(parsed.totalDistanceMeters)) {
+        lifetimeDistanceMeters = parsed.totalDistanceMeters;
+        saveLifetimeDistance(lifetimeDistanceMeters);
       }
 
       updateUIStats(0);
