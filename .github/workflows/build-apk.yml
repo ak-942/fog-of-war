@@ -45,5 +45,6 @@ jobs:
         with:
           name: fog-of-war-apk
           path: android/app/build/outputs/apk/**/*.apk
+          
       - name: Install dependencies
         run: npm install --legacy-peer-deps
