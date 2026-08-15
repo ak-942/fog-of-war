@@ -1,5 +1,16 @@
 {
-  "appId": "com.example.fogofwar",
+  "appId": "com.yourname.explore",
   "appName": "Explore",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "GoogleAuth": {
+      "scopes": [
+        "profile",
+        "email",
+        "https://www.googleapis.com/auth/drive.appdata"
+      ],
+      "serverClientId": "1053287502698-6jhr3noeeh4hn83p3h3bk0rp8t74qd2d.apps.googleusercontent.com",
+      "forceCodeForRefreshToken": true
+    }
+  }
 }
