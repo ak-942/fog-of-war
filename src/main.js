@@ -146,6 +146,7 @@ function updateUIStats(speedMetersPerSec) {
   if (areaDisplay) areaDisplay.textContent = formatArea(unlockedCells.size);
   if (distanceDisplay) distanceDisplay.textContent = formatDistance(tripDistanceMeters);
   if (lifetimeDisplay) lifetimeDisplay.textContent = formatDistance(lifetimeDistanceMeters);
+  if (hexCountDisplay) hexCountDisplay.textContent = unlockedCells.size.toLocaleString();
   if (speedDisplay) {
     const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
     speedDisplay.textContent = `${kmh} km/h`;
