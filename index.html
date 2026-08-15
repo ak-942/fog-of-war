@@ -13,7 +13,7 @@
   <!-- Hamburger Menu Icon -->
   <button id="btnMenu" class="hamburger-btn" aria-label="Open Menu">☰</button>
 
-  <!-- Top Stats Bar (Area | Trip Distance | Speed) -->
+  <!-- Top Stats Bar -->
   <div class="top-stats-bar">
     <div class="stat-box">
       <span class="stat-label">Area</span>
@@ -31,10 +31,10 @@
     </div>
   </div>
 
-  <!-- Bottom Right Floating Center Map Button -->
+  <!-- Center Map Floating Action Button -->
   <button id="btnCenter" class="fab-btn" title="Center Map">🎯</button>
 
-  <!-- Sidebar Dark Overlay -->
+  <!-- Sidebar Overlay -->
   <div id="sidebarOverlay" class="sidebar-overlay"></div>
 
   <!-- Slide-Out Sidebar Drawer -->
@@ -44,7 +44,7 @@
       <button id="btnCloseSidebar" class="close-btn">&times;</button>
     </div>
 
-    <!-- Lifetime Distance Card inside Sidebar -->
+    <!-- Lifetime Stats Card -->
     <div class="sidebar-stat-card">
       <span class="sidebar-stat-label">Overall Distance</span>
       <span id="lifetimeDistanceDisplay" class="sidebar-stat-value">0 m</span>
@@ -53,15 +53,24 @@
       <span id="hexCountDisplay" class="sidebar-stat-value">0</span>
     </div>
 
+    <!-- Vertical Controls -->
     <div class="controls-vertical">
       <button id="btnToggleTracking" class="btn btn-active" title="Toggle Tracking">📡 GPS On</button>
       <button id="btnResetTrip" class="btn" title="Reset Trip Distance">🔄 Reset Trip</button>
       <button id="btnExport" class="btn" title="Export Progress">📤 Export Data</button>
       <button id="btnImport" class="btn" title="Import Progress">📥 Import Data</button>
+
+      <!-- Cloud Backup Controls -->
+      <div class="sidebar-section-title">Cloud Backup (Google Drive)</div>
+      <button id="btnDriveBackup" class="btn" title="Backup to Google Drive">☁️ Backup Now</button>
+      <button id="btnDriveRestore" class="btn" title="Restore from Google Drive">📥 Restore from Drive</button>
+      <div class="sidebar-subtext">
+        Last Backup: <span id="lastBackupTimeDisplay">Never</span>
+      </div>
     </div>
   </div>
 
-  <!-- Hidden File Input for Import -->
+  <!-- Hidden File Input for Local Import -->
   <input type="file" id="fileInput" accept=".json,application/json" style="display: none;" />
 
   <script type="module" src="/src/main.js"></script>
