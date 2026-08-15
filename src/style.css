@@ -262,3 +262,16 @@ html, body {
   background: rgba(16, 185, 129, 0.85);
   border-color: rgba(52, 211, 153, 0.3);
 }
+
+/* --- Reposition Leaflet Zoom Control Below Hamburger Button --- */
+.leaflet-top.leaflet-left {
+  margin-top: 68px;
+  margin-left: 6px;
+}
+
+/* --- Sidebar Stat Card Divider --- */
+.sidebar-card-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 8px 0;
+}
