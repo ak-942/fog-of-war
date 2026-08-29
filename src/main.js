@@ -1,11 +1,9 @@
 import { registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
-import { App } from '@capacitor/app';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
 import { FogEngine } from './fogEngine.js';
-import { LocalNotifications } from '@capacitor/local-notifications';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
@@ -16,7 +14,6 @@ const STORAGE_KEY = 'fog_unlocked_cells';
 const TRIP_DISTANCE_KEY = 'fog_trip_distance_meters';
 const LIFETIME_DISTANCE_KEY = 'fog_lifetime_distance_meters';
 const MAX_IMPORT_HEXES = 200000;
-const NOTIFICATION_ID = 1001;
 
 // Safety Guardrail Thresholds
 const MAX_ACCURACY_METERS = 35;
@@ -91,67 +88,8 @@ let lastPosition = null;
 let lastValidCell = null;
 let speedHistory = [];
 let currentSpeedMetersPerSec = 0;
-let notificationTimer = null;
+let watcherId = null;
 let map, fogEngine;
-
-// --- Notification Logic ---
-async function initNotifications() {
-  // Left empty intentionally. Calling LocalNotifications.requestPermissions() 
-  // on Android 12+ forces the unwanted "Alarms & Reminders" system popup.
-}
-
-async function updateLiveNotification() {
-  if (!isTrackingActive) return;
-
-  const areaStr = formatArea(unlockedCells.size);
-  const distStr = formatDistance(tripDistanceMeters);
-  const kmh = currentSpeedMetersPerSec ? Math.max(0, Math.round(currentSpeedMetersPerSec * 3.6)) : 0;
-
-  try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: NOTIFICATION_ID, // Reuses ID 1001 to update the existing notification in-place
-          title: 'Explore Tracking Active',
-          body: `📍 Trip: ${distStr}  |  ⚡ ${kmh} km/h  |  🗺️ ${areaStr}`,
-          ongoing: false,      // Allows notification to be cleared when swiped/closed
-          autoCancel: true
-        }
-      ]
-    });
-  } catch (err) {
-    console.warn('Failed to update live notification:', err);
-  }
-}
-
-function startNotificationLoop() {
-  if (notificationTimer) clearInterval(notificationTimer);
-  updateLiveNotification();
-  notificationTimer = setInterval(() => {
-    updateLiveNotification();
-  }, 5000);
-}
-
-async function stopNotificationLoop() {
-  if (notificationTimer) {
-    clearInterval(notificationTimer);
-    notificationTimer = null;
-  }
-  try {
-    await LocalNotifications.cancel({ notifications: [{ id: NOTIFICATION_ID }] });
-  } catch (e) {
-    console.warn('Failed to cancel notification:', e);
-  }
-}
-
-// Automatically dismiss the notification whenever the app is closed or removed from recents
-App.addListener('appStateChange', ({ isActive }) => {
-  if (!isActive) {
-    stopNotificationLoop();
-  } else if (isTrackingActive) {
-    startNotificationLoop();
-  }
-});
 
 // --- Distance Calculation (Haversine) ---
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
@@ -339,7 +277,7 @@ function onLocationUpdate(position) {
   if (fogEngine) fogEngine.render(Array.from(unlockedCells));
 }
 
-// --- GPS Watcher ---
+// --- Native GPS Control ---
 async function startGPS() {
   if ('geolocation' in navigator) {
     navigator.geolocation.getCurrentPosition(
@@ -353,7 +291,12 @@ async function startGPS() {
   const initialDistStr = formatDistance(tripDistanceMeters);
 
   try {
-    await BackgroundGeolocation.addWatcher(
+    if (watcherId !== null) {
+      await BackgroundGeolocation.removeWatcher({ id: watcherId });
+      watcherId = null;
+    }
+
+    watcherId = await BackgroundGeolocation.addWatcher(
       {
         backgroundTitle: "Explore Tracking Active",
         backgroundMessage: `📍 Trip: ${initialDistStr}  |  ⚡ 0 km/h  |  🗺️ ${initialAreaStr}`,
@@ -384,6 +327,17 @@ async function startGPS() {
       (err) => console.warn('Watch GPS Error:', err),
       { enableHighAccuracy: true }
     );
+  }
+}
+
+async function stopGPS() {
+  if (watcherId !== null) {
+    try {
+      await BackgroundGeolocation.removeWatcher({ id: watcherId });
+    } catch (e) {
+      console.warn('Failed to remove background watcher:', e);
+    }
+    watcherId = null;
   }
 }
 
@@ -444,16 +398,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
+  document.getElementById('btnToggleTracking')?.addEventListener('click', async (e) => {
     isTrackingActive = !isTrackingActive;
     const btn = e.currentTarget;
     btn.classList.toggle('btn-active', isTrackingActive);
     btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
 
     if (isTrackingActive) {
-      startNotificationLoop();
+      await startGPS();
     } else {
-      stopNotificationLoop();
+      await stopGPS();
     }
   });
 
@@ -578,8 +532,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     reader.readAsText(file);
   });
 
-  // Init Notifications & GPS
-  await initNotifications();
-  startNotificationLoop();
-  startGPS();
+  // Start native location watcher
+  await startGPS();
 });

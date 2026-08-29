@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -11,15 +10,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Required for Android 13+ notification popups -->
+    <!-- Standard notification & boot permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- Optional: Ensures notifications can reschedule after phone reboots -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
-    <!-- Strip exact alarm permissions merged by capacitor plugins -->
-    <!--uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" tools:node="remove" /-->
     
     <application
         android:allowBackup="true"
