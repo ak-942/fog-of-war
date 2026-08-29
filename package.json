@@ -15,7 +15,6 @@
     "@capacitor/cli": "^8.4.2",
     "@capacitor/core": "^8.4.2",
     "@capacitor/filesystem": "^8.1.2",
-    "@capacitor/local-notifications": "^8.3.1",
     "h3-js": "^4.1.0",
     "leaflet": "^1.9.4",
     "localforage": "^1.10.0"
