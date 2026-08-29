@@ -1,5 +1,6 @@
 import { registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { App } from '@capacitor/app';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
@@ -95,14 +96,8 @@ let map, fogEngine;
 
 // --- Notification Logic ---
 async function initNotifications() {
-  try {
-    const status = await LocalNotifications.checkPermissions();
-    if (status.display !== 'granted') {
-      await LocalNotifications.requestPermissions();
-    }
-  } catch (err) {
-    console.warn('LocalNotifications permissions warning:', err);
-  }
+  // Left empty intentionally. Calling LocalNotifications.requestPermissions() 
+  // on Android 12+ forces the unwanted "Alarms & Reminders" system popup.
 }
 
 async function updateLiveNotification() {
@@ -116,12 +111,11 @@ async function updateLiveNotification() {
     await LocalNotifications.schedule({
       notifications: [
         {
-          id: NOTIFICATION_ID,
+          id: NOTIFICATION_ID, // Reuses ID 1001 to update the existing notification in-place
           title: 'Explore Tracking Active',
           body: `📍 Trip: ${distStr}  |  ⚡ ${kmh} km/h  |  🗺️ ${areaStr}`,
-          ongoing: true,
-          autoCancel: false
-          // Omitted schedule parameter to bypass exact alarm permissions
+          ongoing: false,      // Allows notification to be cleared when swiped/closed
+          autoCancel: true
         }
       ]
     });
@@ -149,6 +143,15 @@ async function stopNotificationLoop() {
     console.warn('Failed to cancel notification:', e);
   }
 }
+
+// Automatically dismiss the notification whenever the app is closed or removed from recents
+App.addListener('appStateChange', ({ isActive }) => {
+  if (!isActive) {
+    stopNotificationLoop();
+  } else if (isTrackingActive) {
+    startNotificationLoop();
+  }
+});
 
 // --- Distance Calculation (Haversine) ---
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
