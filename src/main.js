@@ -120,8 +120,8 @@ async function updateLiveNotification() {
           title: 'Explore Tracking Active',
           body: `📍 Trip: ${distStr}  |  ⚡ ${kmh} km/h  |  🗺️ ${areaStr}`,
           ongoing: true,
-          autoCancel: false,
-          schedule: { at: new Date(Date.now() + 50) }
+          autoCancel: false
+          // Omitted schedule parameter to bypass exact alarm permissions
         }
       ]
     });
@@ -346,11 +346,14 @@ async function startGPS() {
     );
   }
 
+  const initialAreaStr = formatArea(unlockedCells.size);
+  const initialDistStr = formatDistance(tripDistanceMeters);
+
   try {
     await BackgroundGeolocation.addWatcher(
       {
-        backgroundMessage: "Tracking your explored areas in background...",
-        backgroundTitle: "Explore Active",
+        backgroundTitle: "Explore Tracking Active",
+        backgroundMessage: `📍 Trip: ${initialDistStr}  |  ⚡ 0 km/h  |  🗺️ ${initialAreaStr}`,
         requestPermissions: true,
         stale: false,
         distanceFilter: 3
