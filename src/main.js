@@ -4,16 +4,18 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { latLngToCell, isValidCell, gridPathCells, gridDistance, gridDisk } from 'h3-js';
 import { FogEngine } from './fogEngine.js';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
 
 // --- Configuration Constants ---
 const H3_RESOLUTION = 11; 
-const H3_RES11_AREA_SQ_METERS = 2250; // Avg area of Res 11 Hex
+const H3_RES11_AREA_SQ_METERS = 2250;
 const STORAGE_KEY = 'fog_unlocked_cells';
 const TRIP_DISTANCE_KEY = 'fog_trip_distance_meters';
 const LIFETIME_DISTANCE_KEY = 'fog_lifetime_distance_meters';
 const MAX_IMPORT_HEXES = 200000;
+const NOTIFICATION_ID = 1001;
 
 // Safety Guardrail Thresholds
 const MAX_ACCURACY_METERS = 35;
@@ -62,7 +64,6 @@ function loadSavedLifetimeDistance() {
     const saved = localStorage.getItem(LIFETIME_DISTANCE_KEY);
     if (saved) return parseFloat(saved);
 
-    // Migration Fallback: If legacy single distance key exists
     const legacySaved = localStorage.getItem('fog_total_distance_meters');
     return legacySaved ? parseFloat(legacySaved) : 0;
   } catch (e) {
@@ -78,18 +79,7 @@ function saveLifetimeDistance(meters) {
   }
 }
 
-// --- Map & Fog Engine Setup ---
-const map = L.map('map').setView([22.7196, 75.8577], 16);
-
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; OpenStreetMap'
-}).addTo(map);
-
-const canvas = document.getElementById('fog-canvas');
-const fogEngine = new FogEngine(canvas, map);
-
-// App State
+// App State Variables
 let unlockedCells = loadSavedHexes();
 let tripDistanceMeters = loadSavedTripDistance();
 let lifetimeDistanceMeters = loadSavedLifetimeDistance();
@@ -99,16 +89,68 @@ let isTrackingActive = true;
 let lastPosition = null;
 let lastValidCell = null;
 let speedHistory = [];
+let currentSpeedMetersPerSec = 0;
+let notificationTimer = null;
+let map, fogEngine;
 
-// Initial Render
-updateUIStats(0);
-fogEngine.render(Array.from(unlockedCells));
+// --- Notification Logic ---
+async function initNotifications() {
+  try {
+    const status = await LocalNotifications.checkPermissions();
+    if (status.display !== 'granted') {
+      await LocalNotifications.requestPermissions();
+    }
+  } catch (err) {
+    console.warn('LocalNotifications permissions warning:', err);
+  }
+}
 
-map.on('move', () => {
-  fogEngine.render(Array.from(unlockedCells));
-});
+async function updateLiveNotification() {
+  if (!isTrackingActive) return;
 
-// --- Distance Calculation (Haversine Formula) ---
+  const areaStr = formatArea(unlockedCells.size);
+  const distStr = formatDistance(tripDistanceMeters);
+  const kmh = currentSpeedMetersPerSec ? Math.max(0, Math.round(currentSpeedMetersPerSec * 3.6)) : 0;
+
+  try {
+    await LocalNotifications.schedule({
+      notifications: [
+        {
+          id: NOTIFICATION_ID,
+          title: 'Explore Tracking Active',
+          body: `📍 Trip: ${distStr}  |  ⚡ ${kmh} km/h  |  🗺️ ${areaStr}`,
+          ongoing: true,
+          autoCancel: false,
+          schedule: { at: new Date(Date.now() + 50) }
+        }
+      ]
+    });
+  } catch (err) {
+    console.warn('Failed to update live notification:', err);
+  }
+}
+
+function startNotificationLoop() {
+  if (notificationTimer) clearInterval(notificationTimer);
+  updateLiveNotification();
+  notificationTimer = setInterval(() => {
+    updateLiveNotification();
+  }, 5000);
+}
+
+async function stopNotificationLoop() {
+  if (notificationTimer) {
+    clearInterval(notificationTimer);
+    notificationTimer = null;
+  }
+  try {
+    await LocalNotifications.cancel({ notifications: [{ id: NOTIFICATION_ID }] });
+  } catch (e) {
+    console.warn('Failed to cancel notification:', e);
+  }
+}
+
+// --- Distance Calculation (Haversine) ---
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -142,6 +184,7 @@ function updateUIStats(speedMetersPerSec) {
   const distanceDisplay = document.getElementById('distanceDisplay');
   const speedDisplay = document.getElementById('speedDisplay');
   const lifetimeDisplay = document.getElementById('lifetimeDistanceDisplay');
+  const hexCountDisplay = document.getElementById('hexCountDisplay');
 
   if (areaDisplay) areaDisplay.textContent = formatArea(unlockedCells.size);
   if (distanceDisplay) distanceDisplay.textContent = formatDistance(tripDistanceMeters);
@@ -153,7 +196,7 @@ function updateUIStats(speedMetersPerSec) {
   }
 }
 
-// --- Auto-Hole Filling (Fills Trapped "Donut" Hexes) ---
+// --- Auto-Hole Filling ---
 function fillTrappedHoles(newlyUnlocked, unlockedSet) {
   let queue = Array.from(newlyUnlocked);
 
@@ -204,7 +247,6 @@ function onLocationUpdate(position) {
     if (distanceMoved < MIN_JITTER_DISTANCE_M) {
       rawSpeedMetersPerSec = 0;
     } else {
-      // Accumulate distance for both Trip and Lifetime counters
       tripDistanceMeters += distanceMoved;
       lifetimeDistanceMeters += distanceMoved;
 
@@ -226,6 +268,7 @@ function onLocationUpdate(position) {
   speedHistory.push(rawSpeedMetersPerSec);
   if (speedHistory.length > 3) speedHistory.shift();
   const smoothedSpeed = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
+  currentSpeedMetersPerSec = smoothedSpeed;
 
   if (!initialCenterDone) {
     map.setView([latitude, longitude], 16);
@@ -290,7 +333,7 @@ function onLocationUpdate(position) {
   }
 
   updateUIStats(smoothedSpeed);
-  fogEngine.render(Array.from(unlockedCells));
+  if (fogEngine) fogEngine.render(Array.from(unlockedCells));
 }
 
 // --- GPS Watcher ---
@@ -338,197 +381,199 @@ async function startGPS() {
   }
 }
 
-// --- Sidebar Drawer Logic ---
-const btnMenu = document.getElementById('btnMenu');
-const btnCloseSidebar = document.getElementById('btnCloseSidebar');
-const sidebar = document.getElementById('sidebar');
-const sidebarOverlay = document.getElementById('sidebarOverlay');
-
-function openSidebar() {
-  sidebar?.classList.add('open');
-  sidebarOverlay?.classList.add('active');
-}
-
-function closeSidebar() {
-  sidebar?.classList.remove('open');
-  sidebarOverlay?.classList.remove('active');
-}
-
-btnMenu?.addEventListener('click', openSidebar);
-btnCloseSidebar?.addEventListener('click', closeSidebar);
-sidebarOverlay?.addEventListener('click', closeSidebar);
-
-// --- Controls ---
-document.getElementById('btnCenter')?.addEventListener('click', () => {
-  if (userMarker) {
-    map.setView(userMarker.getLatLng(), 16);
-  } else {
-    alert('Waiting for GPS position...');
-  }
-});
-
-document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
-  isTrackingActive = !isTrackingActive;
-  const btn = e.currentTarget;
-  btn.classList.toggle('btn-active', isTrackingActive);
-  btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
-});
-
-// Reset Trip Distance Handler
-document.getElementById('btnResetTrip')?.addEventListener('click', () => {
-  if (tripDistanceMeters === 0) {
-    alert('Trip distance is already 0 m.');
-    return;
-  }
-
-  if (confirm('Reset current trip distance to 0? (Overall distance will be kept)')) {
-    tripDistanceMeters = 0;
-    saveTripDistance(0);
-    updateUIStats(0);
-    closeSidebar();
-  }
-});
-
-// --- Export Function ---
-document.getElementById('btnExport')?.addEventListener('click', async () => {
-  closeSidebar();
-  if (unlockedCells.size === 0 && lifetimeDistanceMeters === 0) {
-    alert('No explored areas or distance to export yet!');
-    return;
-  }
-
-  const fileName = `explore_backup_${new Date().toISOString().slice(0, 10)}.json`;
-  const exportData = {
+function getAppDataPayload() {
+  return {
     app: 'fog-of-war',
     exportedAt: new Date().toISOString(),
     tripDistanceMeters: tripDistanceMeters,
     lifetimeDistanceMeters: lifetimeDistanceMeters,
     hexes: Array.from(unlockedCells)
   };
-  const jsonString = JSON.stringify(exportData, null, 2);
+}
 
-  try {
-    await Filesystem.writeFile({
-      path: `Download/${fileName}`,
-      directory: Directory.ExternalStorage,
-      data: jsonString,
-      encoding: Encoding.UTF8
-    });
-    alert(`Export successful!\n\nSaved to: Downloads/${fileName}`);
-  } catch (nativeErr) {
-    console.warn('Native filesystem write to Download failed, trying web fallback:', nativeErr);
+// --- DOM & App Initialization ---
+document.addEventListener('DOMContentLoaded', async () => {
+  map = L.map('map').setView([22.7196, 75.8577], 16);
 
-    try {
-      const blob = new Blob([jsonString], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+  const canvas = document.getElementById('fog-canvas');
+  fogEngine = new FogEngine(canvas, map);
 
-      alert('Export successful!');
-    } catch (webErr) {
-      console.error('Export error:', webErr);
-      alert(`Export failed: ${webErr.message || 'Unable to save backup file.'}`);
-    }
+  updateUIStats(0);
+  fogEngine.render(Array.from(unlockedCells));
+
+  map.on('move', () => {
+    fogEngine.render(Array.from(unlockedCells));
+  });
+
+  // Sidebar Controls
+  const btnMenu = document.getElementById('btnMenu');
+  const btnCloseSidebar = document.getElementById('btnCloseSidebar');
+  const sidebar = document.getElementById('sidebar');
+  const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+  function openSidebar() {
+    sidebar?.classList.add('open');
+    sidebarOverlay?.classList.add('active');
   }
-});
 
-// --- Import Function ---
-const fileInput = document.getElementById('fileInput');
+  function closeSidebar() {
+    sidebar?.classList.remove('open');
+    sidebarOverlay?.classList.remove('active');
+  }
 
-document.getElementById('btnImport')?.addEventListener('click', () => {
-  closeSidebar();
-  fileInput?.click();
-});
+  btnMenu?.addEventListener('click', openSidebar);
+  btnCloseSidebar?.addEventListener('click', closeSidebar);
+  sidebarOverlay?.addEventListener('click', closeSidebar);
 
-fileInput?.addEventListener('change', (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-
-  reader.onload = (event) => {
-    try {
-      let rawText = event.target?.result;
-
-      if (!rawText || typeof rawText !== 'string') {
-        throw new Error('File is empty or unreadable.');
-      }
-
-      if (rawText.charCodeAt(0) === 0xFEFF) {
-        rawText = rawText.slice(1);
-      }
-      rawText = rawText.trim();
-
-      const parsed = JSON.parse(rawText);
-
-      if (!parsed || parsed.app !== 'fog-of-war' || !Array.isArray(parsed.hexes)) {
-        alert('Invalid or incompatible Explore backup file.');
-        return;
-      }
-
-      if (parsed.hexes.length === 0) {
-        alert('The backup file contains no hex data.');
-        return;
-      }
-
-      if (parsed.hexes.length > MAX_IMPORT_HEXES) {
-        alert(`File contains too many hexes (${parsed.hexes.length}). Maximum allowed is ${MAX_IMPORT_HEXES}.`);
-        return;
-      }
-
-      const validHexes = [];
-      for (let item of parsed.hexes) {
-        if (typeof item === 'string') {
-          const cleanHex = item.trim().toLowerCase();
-          if (isValidCell(cleanHex)) {
-            validHexes.push(cleanHex);
-          }
-        }
-      }
-
-      if (validHexes.length === 0) {
-        alert('No valid H3 hexagon IDs found in the file.');
-        return;
-      }
-
-      // Restore Hexes
-      unlockedCells = new Set(validHexes);
-      saveHexes(unlockedCells);
-
-      // Restore Trip Distance if present
-      if (typeof parsed.tripDistanceMeters === 'number' && !isNaN(parsed.tripDistanceMeters)) {
-        tripDistanceMeters = parsed.tripDistanceMeters;
-        saveTripDistance(tripDistanceMeters);
-      }
-
-      // Restore Lifetime Distance if present (or legacy totalDistanceMeters)
-      if (typeof parsed.lifetimeDistanceMeters === 'number' && !isNaN(parsed.lifetimeDistanceMeters)) {
-        lifetimeDistanceMeters = parsed.lifetimeDistanceMeters;
-        saveLifetimeDistance(lifetimeDistanceMeters);
-      } else if (typeof parsed.totalDistanceMeters === 'number' && !isNaN(parsed.totalDistanceMeters)) {
-        lifetimeDistanceMeters = parsed.totalDistanceMeters;
-        saveLifetimeDistance(lifetimeDistanceMeters);
-      }
-
-      updateUIStats(0);
-      fogEngine.render(Array.from(unlockedCells));
-
-      alert(`Successfully imported ${validHexes.length} unlocked hexes and distance data!`);
-    } catch (err) {
-      console.error('Import failure:', err);
-      alert('Failed to import file. Please ensure it is a valid JSON backup file.');
-    } finally {
-      e.target.value = '';
+  document.getElementById('btnCenter')?.addEventListener('click', () => {
+    if (userMarker) {
+      map.setView(userMarker.getLatLng(), 16);
+    } else {
+      alert('Waiting for GPS position...');
     }
-  };
+  });
 
-  reader.readAsText(file);
+  document.getElementById('btnToggleTracking')?.addEventListener('click', (e) => {
+    isTrackingActive = !isTrackingActive;
+    const btn = e.currentTarget;
+    btn.classList.toggle('btn-active', isTrackingActive);
+    btn.innerHTML = isTrackingActive ? '📡 GPS On' : '📡 GPS Off';
+
+    if (isTrackingActive) {
+      startNotificationLoop();
+    } else {
+      stopNotificationLoop();
+    }
+  });
+
+  document.getElementById('btnResetTrip')?.addEventListener('click', () => {
+    if (tripDistanceMeters === 0) {
+      alert('Trip distance is already 0 m.');
+      return;
+    }
+    if (confirm('Reset current trip distance to 0? (Overall distance will be kept)')) {
+      tripDistanceMeters = 0;
+      saveTripDistance(0);
+      updateUIStats(0);
+      closeSidebar();
+    }
+  });
+
+  // Local Export
+  document.getElementById('btnExport')?.addEventListener('click', async () => {
+    closeSidebar();
+    if (unlockedCells.size === 0 && lifetimeDistanceMeters === 0) {
+      alert('No explored areas or distance to export yet!');
+      return;
+    }
+
+    const fileName = `explore_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    const exportData = getAppDataPayload();
+    const jsonString = JSON.stringify(exportData, null, 2);
+
+    try {
+      await Filesystem.writeFile({
+        path: `Download/${fileName}`,
+        directory: Directory.ExternalStorage,
+        data: jsonString,
+        encoding: Encoding.UTF8
+      });
+      alert(`Export successful!\n\nSaved to: Downloads/${fileName}`);
+    } catch (nativeErr) {
+      try {
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        alert('Export successful!');
+      } catch (webErr) {
+        alert(`Export failed: ${webErr.message || 'Unable to save backup file.'}`);
+      }
+    }
+  });
+
+  // Local Import
+  const fileInput = document.getElementById('fileInput');
+
+  document.getElementById('btnImport')?.addEventListener('click', () => {
+    closeSidebar();
+    fileInput?.click();
+  });
+
+  fileInput?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        let rawText = event.target?.result;
+        if (!rawText || typeof rawText !== 'string') throw new Error('File empty');
+        if (rawText.charCodeAt(0) === 0xFEFF) rawText = rawText.slice(1);
+        
+        const parsed = JSON.parse(rawText.trim());
+
+        if (!parsed || parsed.app !== 'fog-of-war' || !Array.isArray(parsed.hexes)) {
+          alert('Invalid or incompatible Explore backup file.');
+          return;
+        }
+
+        if (parsed.hexes.length === 0) {
+          alert('The backup file contains no hex data.');
+          return;
+        }
+
+        if (parsed.hexes.length > MAX_IMPORT_HEXES) {
+          alert(`File contains too many hexes (${parsed.hexes.length}). Limit is ${MAX_IMPORT_HEXES}.`);
+          return;
+        }
+
+        const validHexes = parsed.hexes
+          .filter(item => typeof item === 'string' && isValidCell(item.trim().toLowerCase()))
+          .map(item => item.trim().toLowerCase());
+
+        if (validHexes.length === 0) {
+          alert('No valid H3 hexagon IDs found in the file.');
+          return;
+        }
+
+        unlockedCells = new Set(validHexes);
+        saveHexes(unlockedCells);
+
+        if (typeof parsed.tripDistanceMeters === 'number' && !isNaN(parsed.tripDistanceMeters)) {
+          tripDistanceMeters = parsed.tripDistanceMeters;
+          saveTripDistance(tripDistanceMeters);
+        }
+
+        if (typeof parsed.lifetimeDistanceMeters === 'number' && !isNaN(parsed.lifetimeDistanceMeters)) {
+          lifetimeDistanceMeters = parsed.lifetimeDistanceMeters;
+          saveLifetimeDistance(lifetimeDistanceMeters);
+        }
+
+        updateUIStats(0);
+        fogEngine.render(Array.from(unlockedCells));
+        alert(`Successfully imported ${validHexes.length} unlocked hexes!`);
+      } catch (err) {
+        alert('Failed to import file. Ensure it is a valid JSON backup file.');
+      } finally {
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  // Init Notifications & GPS
+  await initNotifications();
+  startNotificationLoop();
+  startGPS();
 });
-
-startGPS();
