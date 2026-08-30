@@ -89,6 +89,7 @@ let lastValidCell = null;
 let speedHistory = [];
 let currentSpeedMetersPerSec = 0;
 let watcherId = null;
+let lastNotificationTime = 0;
 let map, fogEngine;
 
 // --- Distance Calculation (Haversine) ---
@@ -134,6 +135,50 @@ function updateUIStats(speedMetersPerSec) {
   if (speedDisplay) {
     const kmh = speedMetersPerSec ? Math.max(0, Math.round(speedMetersPerSec * 3.6)) : 0;
     speedDisplay.textContent = `${kmh} km/h`;
+  }
+}
+
+// --- Dynamic Notification Updater ---
+async function updateBackgroundNotification() {
+  const now = Date.now();
+  // Throttle updates to at most once every 3 seconds to avoid native bridge spam
+  if (now - lastNotificationTime < 3000) return;
+  lastNotificationTime = now;
+
+  const areaStr = formatArea(unlockedCells.size);
+  const distStr = formatDistance(tripDistanceMeters);
+  const kmh = currentSpeedMetersPerSec ? Math.max(0, Math.round(currentSpeedMetersPerSec * 3.6)) : 0;
+  const updatedMessage = `📍 Trip: ${distStr}  |  ⚡ ${kmh} km/h  |  🗺️ ${areaStr}`;
+
+  try {
+    if (watcherId !== null) {
+      await BackgroundGeolocation.removeWatcher({ id: watcherId });
+    }
+    watcherId = await BackgroundGeolocation.addWatcher(
+      {
+        backgroundTitle: "Explore Tracking Active",
+        backgroundMessage: updatedMessage,
+        requestPermissions: false,
+        stale: false,
+        distanceFilter: 3
+      },
+      (location, error) => {
+        if (error) return;
+        if (location && isTrackingActive) {
+          onLocationUpdate({
+            coords: {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              accuracy: location.accuracy,
+              speed: location.speed
+            },
+            timestamp: location.time || Date.now()
+          });
+        }
+      }
+    );
+  } catch (err) {
+    console.warn('Failed to update background notification text:', err);
   }
 }
 
@@ -275,6 +320,9 @@ function onLocationUpdate(position) {
 
   updateUIStats(smoothedSpeed);
   if (fogEngine) fogEngine.render(Array.from(unlockedCells));
+
+  // Trigger live notification text update
+  updateBackgroundNotification();
 }
 
 // --- Native GPS Control ---
